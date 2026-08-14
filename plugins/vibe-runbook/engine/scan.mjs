@@ -2,6 +2,7 @@ import { extractClaims } from './extract.mjs';
 import { classifyShape } from './classify.mjs';
 import { parseCost } from './cost.mjs';
 import { determineVenue } from './venue.mjs';
+import { findStubs } from './stubs.mjs';
 
 export const SCHEMA_VERSION = '1.0.0';
 
@@ -34,5 +35,5 @@ export function scanRunbook(markdown, filePath) {
     };
   });
 
-  return { schemaVersion: SCHEMA_VERSION, runbook: filePath, coverage, claims: enriched };
+  return { schemaVersion: SCHEMA_VERSION, runbook: filePath, coverage, claims: enriched, stubs: findStubs(markdown) };
 }

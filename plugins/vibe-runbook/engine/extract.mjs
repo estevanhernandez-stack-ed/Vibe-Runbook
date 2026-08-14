@@ -1,3 +1,5 @@
+import { STUB_RE } from './stubs.mjs';
+
 // Markers a runbook may use to flag a checkable claim. Este's habit is the
 // seed set; the honesty gate in Task 2 is what keeps unmarked docs truthful.
 // `re` requires content after the marker on the same logical line (after
@@ -296,7 +298,13 @@ function groupIntoUnits(lines, startIdx, endIdxExclusive) {
       continue;
     }
 
-    if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw)) {
+    if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw) || STUB_RE.test(raw)) {
+      // A stub line is real content a reader sees (countContentLines below
+      // still counts it) but it is not a claim -- there is nothing to check
+      // in an admission that a section wasn't written. Excluding it here
+      // keeps it out of every unit the marker/bare/prose passes see, and it
+      // still breaks a unit the same way a blank line does, so it can never
+      // fuse adjacent claims into one fabricated string either.
       flush();
       continue;
     }
@@ -454,7 +462,11 @@ export function extractClaims(markdown, filePath) {
         continue;
       }
       const content = stripBlockquotePrefix(raw).trim();
-      if (content === '') {
+      if (content === '' || STUB_RE.test(content)) {
+        // A stub can only ever be a paragraph break here, never content: an
+        // unwritten section is not a claim, so a blockquoted one must not
+        // reach the preamble pass any more than a bare one reaches the body
+        // pass below. Same treatment as a blank blockquote line.
         flushParagraph();
         continue;
       }
