@@ -113,6 +113,12 @@ export function verifyStatus(claim, { httpProbe }) {
     : { ok: false, evidence: `${claim.url} -> ${observed}, runbook says ${expected}` };
 }
 
+// IMPLEMENTED AND NOT YET WIRED. No production caller in v0.1: the walk has no
+// write-route enumeration to feed it, which is the missing half rather than
+// this one. Kept because it is a spec-named capability with a technique behind
+// it that found a real defect on STAR, and re-deriving it later would be the
+// expensive part. Do not read it as a live path.
+//
 // Send a request that will fail validation, against a resource that does not
 // exist. The guard can only be observed by attempting the thing it prevents,
 // and this is the only way found to do that without risking the write.
@@ -133,6 +139,11 @@ export function probeWriteGuard(route, { post }) {
   return { ok: false, evidence: `${route.path} -> ${observed}, runbook says ${route.expected}` };
 }
 
+// IMPLEMENTED AND NOT YET WIRED. No production caller in v0.1 -- the report's
+// coverage fraction is computed from the claim list directly. This is the
+// shape the enumeration half will take when a contract source is read; it is
+// not a live path today.
+//
 // Enumeration is mechanical. The total travels with the items so a report can
 // never quietly describe a sample as if it were the whole surface.
 export function enumerated(list) {

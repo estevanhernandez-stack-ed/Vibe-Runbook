@@ -7,6 +7,5 @@
   "scripts": {
     "test": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js --passWithNoTests"
   },
-  "dependencies": { "ajv": "^8.17.1" },
-  "devDependencies": { "jest": "^29.7.0" }
+  "devDependencies": { "ajv": "^8.17.1", "jest": "^29.7.0" }
 }
