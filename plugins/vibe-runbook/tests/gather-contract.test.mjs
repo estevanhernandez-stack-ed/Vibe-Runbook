@@ -44,3 +44,36 @@ test('a hand-rolled evidence object with an unknown kind is skipped at the seam,
   expect(out.facts).toHaveLength(0);
   expect(out.gaps.some((g) => /bad/.test(g) && /run-commnd/.test(g))).toBe(true);
 });
+
+test('a gatherer whose run() returns undefined is skipped, and the rest of the batch still runs', () => {
+  // Regression: an earlier version of runGatherers narrowed its try to just
+  // the g.run(ctx) call, leaving the shape check and the merge outside it.
+  // A gatherer returning undefined threw an uncaught TypeError reading
+  // ev.facts, which crashed the whole runGatherers call — every gatherer
+  // after "broken" never ran, not just "broken" itself. Asserting only
+  // "it didn't throw" would miss that; assert "fine" still ran and its
+  // facts still landed.
+  const broken = { name: 'broken', run: () => undefined };
+  const fine = {
+    name: 'fine',
+    run: () => makeEvidence('fine', { facts: [{ kind: 'port', key: 'web', value: '3000', source: 'p.json' }], gaps: [] }),
+  };
+  const out = runGatherers([broken, fine], {});
+  expect(out.skipped).toEqual(['broken']);
+  expect(out.ran).toEqual(['fine']);
+  expect(out.facts).toEqual([{ kind: 'port', key: 'web', value: '3000', source: 'p.json' }]);
+  expect(out.gaps.some((g) => /broken/.test(g))).toBe(true);
+});
+
+test('a gatherer whose run() returns an object with no facts property is skipped, and the rest of the batch still runs', () => {
+  const broken = { name: 'broken', run: () => ({ gatherer: 'broken', ok: true, gaps: [] }) };
+  const fine = {
+    name: 'fine',
+    run: () => makeEvidence('fine', { facts: [{ kind: 'env-key', key: 'API_KEY', value: '', source: '.env.example' }], gaps: [] }),
+  };
+  const out = runGatherers([broken, fine], {});
+  expect(out.skipped).toEqual(['broken']);
+  expect(out.ran).toEqual(['fine']);
+  expect(out.facts).toEqual([{ kind: 'env-key', key: 'API_KEY', value: '', source: '.env.example' }]);
+  expect(out.gaps.some((g) => /broken/.test(g))).toBe(true);
+});
