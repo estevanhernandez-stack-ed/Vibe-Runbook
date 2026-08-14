@@ -96,7 +96,7 @@ function claimDetail(claims) {
   return out;
 }
 
-export function renderReport({ runbook, env, claims, coverage }) {
+export function renderReport({ runbook, env, claims, coverage, stubs = [] }) {
   const s = summarize(claims);
   const out = [];
 
@@ -138,6 +138,15 @@ export function renderReport({ runbook, env, claims, coverage }) {
     if (n > 0) out.push(`- ${state}: ${n}`);
   }
   out.push('');
+
+  // An unwritten section is not a claim -- there is nothing to check, so it
+  // gets no verdict and no shape. Reported on its own line beside the
+  // coverage fractions, not folded into the six verdicts above.
+  if (stubs.length > 0) {
+    out.push(`**${stubs.length} sections unwritten**`, '');
+    for (const s of stubs) out.push(`- line ${s.line}: ${s.question}`);
+    out.push('');
+  }
 
   if (claims.length > 0) out.push(...claimDetail(claims));
 
