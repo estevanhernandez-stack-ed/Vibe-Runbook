@@ -61,3 +61,35 @@ test('drops vacuous label-only preamble candidates, keeps the pin claims that mo
   expect(texts.some((t) => t.includes('star-00049-j5r'))).toBe(true);
   expect(texts.some((t) => t.includes('0855bd2'))).toBe(true);
 });
+
+// star-smoke.md:3-5 (source) reads as one wrapped sentence: "**Revision
+// `star-00049-j5r`**, HEAD `0855bd2`, 931 tests green, working tree in
+// sync with origin/main." HEAD's sha sits on the next physical line from
+// its own label, and "931 tests green" carries no bold or backtick at
+// all. Both only become findable once physical lines join into one
+// logical sentence and that sentence's comma list is split into claims.
+test('a preamble pin split across a line-wrap arrives with its label attached', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const preambleTexts = claims.filter((c) => c.marker === 'preamble').map((c) => c.text);
+  expect(preambleTexts).toContain('HEAD `0855bd2`');
+});
+
+test('a preamble pin with no bold or backtick delimiter is still its own claim', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const preambleTexts = claims.filter((c) => c.marker === 'preamble').map((c) => c.text);
+  expect(preambleTexts).toContain('931 tests green');
+});
+
+// star-smoke.md:163 is a bare "**Right:**" with nothing after it on the
+// same line — its content is a bulleted list two lines down. This was the
+// Task 1 minor limitation (a bare marker whose content lives in a list
+// below it goes unmatched); it shares a root cause with the line-wrap
+// gaps above and closes the same way, by joining into a logical block
+// instead of reading one physical line at a time.
+test('a bare marker reaches into the bulleted list under it, one claim per item', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const rightClaims = claims.filter((c) => c.marker === 'right');
+  const fromTheList = rightClaims.find((c) => c.text === 'The button is dead until a file is chosen.');
+  expect(fromTheList).toBeDefined();
+  expect(fromTheList.source.line).toBe(165);
+});

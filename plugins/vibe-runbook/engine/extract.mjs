@@ -1,13 +1,25 @@
 // Markers a runbook may use to flag a checkable claim. Este's habit is the
 // seed set; the honesty gate in Task 2 is what keeps unmarked docs truthful.
-// Each regex requires content after the marker on the same line — a bare
-// `**Right:**` whose content lives in a bulleted list below it (not on the
-// same line) is not matched. Known, accepted limitation of the line-based
-// scan; see star-smoke.md:163 for a real instance.
+// `re` requires content after the marker on the same logical line (after
+// continuation-joining, below); `bareRe` recognizes the marker with nothing
+// after it at all — how a `**Right:**` whose content lives in a bulleted
+// list underneath it gets found, instead of silently matching nothing.
 const MARKERS = [
-  { name: 'right', re: /^\s*\*\*Right(?:,[^*]*)?:\*\*\s*(.+)$/i },
-  { name: 'wrong', re: /^\s*\*\*Wrong[^*]*:\*\*\s*(.+)$/i },
-  { name: 'expect', re: /^\s*\*\*(?:Expected|Should)[^*]*:\*\*\s*(.+)$/i },
+  {
+    name: 'right',
+    re: /^\s*\*\*Right(?:,[^*]*)?:\*\*\s*(.+)$/i,
+    bareRe: /^\s*\*\*Right(?:,[^*]*)?:\*\*\s*$/i,
+  },
+  {
+    name: 'wrong',
+    re: /^\s*\*\*Wrong[^*]*:\*\*\s*(.+)$/i,
+    bareRe: /^\s*\*\*Wrong[^*]*:\*\*\s*$/i,
+  },
+  {
+    name: 'expect',
+    re: /^\s*\*\*(?:Expected|Should)[^*]*:\*\*\s*(.+)$/i,
+    bareRe: /^\s*\*\*(?:Expected|Should)[^*]*:\*\*\s*$/i,
+  },
 ];
 
 // A bolded or backticked label-value pair, e.g. "**Revision `star-00049-j5r`**"
@@ -43,6 +55,54 @@ function stripBlockquotePrefix(line) {
   return line.replace(/^\s*>\s?/, '');
 }
 
+function isHeadingLine(line) {
+  return /^\s*#{1,6}\s/.test(line);
+}
+
+function isListItemStart(line) {
+  return /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
+}
+
+function stripListMarker(line) {
+  return line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '');
+}
+
+// Walks `text` once, treating a `**bold**` or `` `backtick` `` span as
+// atomic, and splits on top-level occurrences of `char` — one that falls
+// outside both kinds of span. A comma inside "`24 scenes · 67 claims`" or a
+// period inside "**...are open.**" is content, never a boundary.
+function splitTopLevel(text, char) {
+  const segments = [];
+  let cur = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '`') {
+      const end = text.indexOf('`', i + 1);
+      const stop = end === -1 ? text.length : end + 1;
+      cur += text.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (text.startsWith('**', i)) {
+      const end = text.indexOf('**', i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      cur += text.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (text[i] === char) {
+      segments.push(cur);
+      cur = '';
+      i += 1;
+      continue;
+    }
+    cur += text[i];
+    i += 1;
+  }
+  segments.push(cur);
+  return segments;
+}
+
 // A document with almost no marked blocks is one we cannot read, and saying
 // so is the product. Silence here would read as "nothing to check".
 const LOW_CONFIDENCE_RATIO = 0.02;
@@ -68,6 +128,50 @@ function markupGuidance(filePath, totalBlocks, markedBlocks) {
   ].join('\n');
 }
 
+// Groups a run of physical lines into logical units for the body scan. A
+// unit is a maximal run of continuation lines belonging to one marker line,
+// one list item, or one unmarked paragraph — a blank line, a heading, and a
+// new list item's own bullet all end the current unit and start the next.
+// This is the join that lets a `**Right:**` sentence (or a list item under
+// one) that wraps across physical lines reach the marker regex whole, and
+// it is why totalBlocks below counts logical blocks instead of physical
+// lines: a three-line sentence is one checkable claim, not three.
+function groupIntoUnits(lines, startIdx, endIdxExclusive) {
+  const units = [];
+  let cur = null;
+  const flush = () => {
+    if (cur && cur.lines.length) units.push(cur);
+    cur = null;
+  };
+  for (let i = startIdx; i < endIdxExclusive; i += 1) {
+    const raw = lines[i];
+    if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw)) {
+      flush();
+      continue;
+    }
+    if (isListItemStart(raw)) {
+      flush();
+      cur = { lines: [stripListMarker(raw)], startLine: i + 1, isListItem: true };
+      continue;
+    }
+    if (cur === null) {
+      cur = { lines: [raw], startLine: i + 1, isListItem: false };
+    } else {
+      cur.lines.push(raw);
+    }
+  }
+  flush();
+  return units;
+}
+
+function joinUnit(unit) {
+  return unit.lines.map((l) => l.trim()).join(' ');
+}
+
+function isMarkerText(text) {
+  return MARKERS.some((mk) => mk.re.test(text) || mk.bareRe.test(text));
+}
+
 export function extractClaims(markdown, filePath) {
   const lines = markdown.split(/\r?\n/);
   const claims = [];
@@ -87,50 +191,163 @@ export function extractClaims(markdown, filePath) {
   }
 
   if (preambleEnd >= 0) {
+    // Group the blockquote into logical paragraphs before recognizing
+    // anything in it — markdown wraps a paragraph across physical lines,
+    // and a bare blockquote line ("just >") is the paragraph break, the
+    // same way it reads to a person.
+    const paragraphs = [];
+    let curLines = [];
+    let curStart = null;
+    const flushParagraph = () => {
+      if (curLines.length) paragraphs.push({ text: curLines.join(' '), startLine: curStart });
+      curLines = [];
+      curStart = null;
+    };
     for (let i = 0; i <= preambleEnd; i += 1) {
       const raw = lines[i];
-      if (!isBlockquoteLine(raw)) continue;
-      const content = stripBlockquotePrefix(raw);
-      const seenOnLine = new Set();
-      for (const { kind, re } of PREAMBLE_PATTERNS) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(content)) !== null) {
-          const text = m[0].trim();
-          if (!text || seenOnLine.has(text)) continue;
-          if (kind === 'bold' && isVacuousLabel(text)) continue;
-          seenOnLine.add(text);
-          n += 1;
-          claims.push({
-            id: `c-${String(n).padStart(3, '0')}`,
-            source: { file: filePath, line: i + 1 },
-            text,
-            marker: 'preamble',
-          });
+      if (!isBlockquoteLine(raw)) {
+        flushParagraph();
+        continue;
+      }
+      const content = stripBlockquotePrefix(raw).trim();
+      if (content === '') {
+        flushParagraph();
+        continue;
+      }
+      if (curLines.length === 0) curStart = i + 1;
+      curLines.push(content);
+    }
+    flushParagraph();
+
+    for (const { text: paragraphText, startLine } of paragraphs) {
+      const seenInParagraph = new Set();
+      // Split into sentences so a comma inside an earlier, unrelated clause
+      // of the same paragraph never bleeds into a pin-list sentence
+      // elsewhere in it.
+      for (const rawSentence of splitTopLevel(paragraphText, '.')) {
+        const sentence = rawSentence.trim();
+        if (!sentence) continue;
+
+        if (sentence.includes('`')) {
+          // A sentence carrying a backtick is a listing of labelled
+          // values, comma-separated: "**Revision `x`**, HEAD `y`, 931
+          // tests green, working tree in sync" is four claims, not one —
+          // split on the commas that live outside a span, so each pin
+          // becomes its own claim including the bare-prose ones that
+          // carry no bold or backtick at all.
+          for (const rawSeg of splitTopLevel(sentence, ',')) {
+            const seg = rawSeg.trim();
+            if (!seg || seenInParagraph.has(seg)) continue;
+            if (/^\*\*.*\*\*$/.test(seg) && isVacuousLabel(seg)) continue;
+            seenInParagraph.add(seg);
+            n += 1;
+            claims.push({
+              id: `c-${String(n).padStart(3, '0')}`,
+              source: { file: filePath, line: startLine },
+              text: seg,
+              marker: 'preamble',
+            });
+          }
+          continue;
+        }
+
+        // No backtick anywhere in this sentence: the original bold/backtick
+        // span scan, unchanged in spirit, now running against a whole
+        // logical sentence instead of one physical line.
+        for (const { kind, re } of PREAMBLE_PATTERNS) {
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(sentence)) !== null) {
+            const text = m[0].trim();
+            if (!text || seenInParagraph.has(text)) continue;
+            if (kind === 'bold' && isVacuousLabel(text)) continue;
+            seenInParagraph.add(text);
+            n += 1;
+            claims.push({
+              id: `c-${String(n).padStart(3, '0')}`,
+              source: { file: filePath, line: startLine },
+              text,
+              marker: 'preamble',
+            });
+          }
         }
       }
     }
   }
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.trim() === '') continue;
-    if (/^\s*(#{1,6})\s/.test(line)) continue;
+  // The body scan starts right after the preamble. The blockquote is fully
+  // handled above; letting it fall into the unit grouping below too would
+  // merge the whole thing into one meaningless unit, because nothing in it
+  // is blank in the physical sense — every line starts with '>'.
+  const bodyStart = preambleEnd >= 0 ? preambleEnd + 1 : 0;
+  const units = groupIntoUnits(lines, bodyStart, lines.length);
+
+  let u = 0;
+  while (u < units.length) {
+    const unit = units[u];
+    const text = joinUnit(unit);
     totalBlocks += 1;
 
-    for (const marker of MARKERS) {
-      const m = line.match(marker.re);
-      if (!m) continue;
+    const inline = MARKERS.find((mk) => mk.re.test(text));
+    if (inline) {
+      const m = text.match(inline.re);
       markedBlocks += 1;
       n += 1;
       claims.push({
         id: `c-${String(n).padStart(3, '0')}`,
-        source: { file: filePath, line: i + 1 },
+        source: { file: filePath, line: unit.startLine },
         text: m[1].trim(),
-        marker: marker.name,
+        marker: inline.name,
       });
-      break;
+      u += 1;
+      continue;
     }
+
+    const bare = MARKERS.find((mk) => mk.bareRe.test(text));
+    if (bare) {
+      const next = units[u + 1];
+      if (next && next.isListItem) {
+        // The next block is a list: this is the Task 1 case, a bare
+        // marker whose content lives in the bullets below it. Each item
+        // is its own claim, own line, own reading.
+        let k = u + 1;
+        while (k < units.length && units[k].isListItem) {
+          const itemText = joinUnit(units[k]);
+          markedBlocks += 1;
+          totalBlocks += 1;
+          n += 1;
+          claims.push({
+            id: `c-${String(n).padStart(3, '0')}`,
+            source: { file: filePath, line: units[k].startLine },
+            text: itemText,
+            marker: bare.name,
+          });
+          k += 1;
+        }
+        u = k;
+        continue;
+      }
+      const nextText = next ? joinUnit(next) : null;
+      if (next && !isMarkerText(nextText)) {
+        markedBlocks += 1;
+        totalBlocks += 1;
+        n += 1;
+        claims.push({
+          id: `c-${String(n).padStart(3, '0')}`,
+          source: { file: filePath, line: next.startLine },
+          text: nextText,
+          marker: bare.name,
+        });
+        u += 2;
+        continue;
+      }
+      // A bare marker with nothing usable following it (end of document,
+      // or another marker immediately after). Known, accepted limitation.
+      u += 1;
+      continue;
+    }
+
+    u += 1;
   }
 
   const ratio = totalBlocks === 0 ? 0 : markedBlocks / totalBlocks;

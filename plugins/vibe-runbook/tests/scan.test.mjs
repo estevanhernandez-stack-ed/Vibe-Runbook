@@ -28,14 +28,19 @@ test('carries the extraction coverage through', () => {
   expect(out.coverage.totalBlocks).toBeGreaterThan(out.coverage.markedBlocks);
 });
 
-// The fixture has a known answer: star-00049-j5r is a genuinely stale pin a
-// real walk caught. If the pipeline can't see it as a pin end-to-end, the
-// plugin fails at its central job — extraction and classification each pass
-// in isolation and the composition is what this test is actually checking.
-test('the pipeline recognizes the fixture\'s known-stale pin end-to-end', () => {
+// The fixture has a known answer: three genuinely stale pins a real walk
+// caught (star-00049-j5r, 0855bd2, 931 tests green), sitting in one
+// comma-separated sentence in the preamble, one of them split across a
+// line-wrap (HEAD / `0855bd2`) and one carrying no bold or backtick at all
+// (931 tests green). If the pipeline can't see all three as pins
+// end-to-end, the plugin fails at its central job — extraction and
+// classification each pass in isolation and the composition is what this
+// test is actually checking. Assert each by name, not just "some claim".
+test('the pipeline recognizes all three of the fixture\'s known-stale pins end-to-end', () => {
   const out = scanRunbook(star, 'tests/fixtures/star-smoke.md');
-  expect(out.claims.some((c) => c.shape === 'pin')).toBe(true);
-  expect(
-    out.claims.some((c) => c.text.includes('star-00049-j5r') && c.shape === 'pin')
-  ).toBe(true);
+  const pinTexts = out.claims.filter((c) => c.shape === 'pin').map((c) => c.text);
+
+  expect(pinTexts.some((t) => t.includes('star-00049-j5r'))).toBe(true);
+  expect(pinTexts.some((t) => t.includes('0855bd2'))).toBe(true);
+  expect(pinTexts.some((t) => t.includes('931 tests green'))).toBe(true);
 });
