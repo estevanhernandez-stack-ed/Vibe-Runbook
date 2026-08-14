@@ -33,3 +33,12 @@ test('every classification names the rule that fired', () => {
   expect(classifyShape('Revision `star-00049-j5r`').rule).toBe('pin:labelled-identifier');
   expect(classifyShape('Your Liverpool export says 58').rule).toBe('none');
 });
+
+// A preamble claim keeps its markdown wrapping verbatim in `text` (that's
+// extract.mjs's job, not this file's) — classify has to see through it to
+// reach the same verdict it already gives the unwrapped form above.
+test('surrounding markdown emphasis and code delimiters do not block classification', () => {
+  expect(classifyShape('**Revision `star-00049-j5r`**').shape).toBe('pin');
+  expect(classifyShape('`HEAD 0855bd2`').shape).toBe('pin');
+  expect(classifyShape('**931 tests green**').shape).toBe('pin');
+});

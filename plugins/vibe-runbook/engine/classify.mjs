@@ -33,9 +33,41 @@ export const RULES = [
   },
 ];
 
+// Matching only, never storage: a claim extracted from a preamble carries its
+// markdown wrapping in `text` on purpose (extract.mjs keeps it verbatim, both
+// for faithful display and because remediation later matches `text` back
+// against the file byte-for-byte). "**Revision `star-00049-j5r`**" has to
+// reach the pin rule as `Revision \`star-00049-j5r\``, so the rules see a
+// stripped copy and the caller's string is never touched.
+//
+// Only delimiters that wrap the *entire* string come off, one layer at a
+// time — a backtick or asterisk sitting in the middle of a claim is content,
+// not decoration, and is left alone. "**Revision `star-00049-j5r`**" loses
+// its outer `**` and stops there, because the remaining string starts with
+// "R" — the inner backticks around the id are never touched.
+const WRAPS = [/^\*\*(.+)\*\*$/s, /^__(.+)__$/s, /^\*(.+)\*$/s, /^_(.+)_$/s, /^`(.+)`$/s];
+
+function stripOuterMarkup(text) {
+  let s = text.trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const re of WRAPS) {
+      const m = s.match(re);
+      if (m) {
+        s = m[1].trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return s;
+}
+
 export function classifyShape(text) {
+  const normalized = stripOuterMarkup(text);
   for (const rule of RULES) {
-    if (rule.test(text)) {
+    if (rule.test(normalized)) {
       return { shape: rule.shape, confidence: rule.confidence, rule: rule.name };
     }
   }
