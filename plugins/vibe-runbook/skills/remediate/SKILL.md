@@ -34,9 +34,15 @@ That prints every diff and writes nothing. Read the diffs out to the user.
 
    Each file is backed up before its first write and the backup paths are
    printed. Roll back by copying a backup over the file it names.
-3. A claim whose text no longer appears in its file is skipped and named, not
-   guessed at. That means the document moved under the cached scan — re-run
-   `:scan` and walk again before remediating.
+3. A claim with no verbatim match in its file is skipped and named, not guessed
+   at. Two causes:
+   - The document moved under the cached scan. Re-run `:scan`, walk again, then
+     remediate.
+   - **The claim was joined across a line wrap** and has no single-line span to
+     replace. STAR's own HEAD pin is this shape: `HEAD` ends one line and
+     `` `0855bd2` `` opens the next inside a blockquote. The claim is correct;
+     rewriting it means rewriting the wrap, which v0.1 does not do. Offer the
+     user the diff to apply by hand instead — the `after` line is exact.
 4. Report the backup paths so a rollback is one step.
 
 `--apply` is the only difference between reading and writing. Never add it

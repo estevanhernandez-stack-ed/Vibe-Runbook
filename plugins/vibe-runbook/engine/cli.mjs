@@ -241,9 +241,15 @@ if (isMain) {
     } else {
       // One backup per file, taken before that file's first write, and the
       // write itself is a verbatim match on the claim's own text. A claim
-      // whose text no longer appears in the file is reported and skipped --
-      // the document moved under the cached scan, and writing a guess into
-      // somebody's runbook is the one thing this path must never do.
+      // whose text does not appear verbatim is reported and skipped: writing a
+      // guess into somebody's runbook is the one thing this path must never
+      // do. Two causes, and the message names both rather than asserting one.
+      // The document may have moved under the cached scan. Or the claim was
+      // joined across a line wrap at extraction -- STAR's own HEAD pin is
+      // exactly that, "HEAD" ending line 4 and "`0855bd2`" opening line 5
+      // under a `> ` prefix -- so the joined text is correct as a claim and
+      // has no verbatim span in the file. Rewriting a wrapped claim means
+      // rewriting the wrap, which is a v0.2 problem and not one to guess at.
       const backups = new Map();
       const unmatched = [];
       for (const p of plan.proposals) {
@@ -259,7 +265,11 @@ if (isMain) {
         { applied: true, backups: [...backups.values()] },
       ));
       for (const p of unmatched) {
-        console.error(`skipped ${p.id}: its text is no longer in ${p.source?.file ?? 'any file'}; re-scan first`);
+        console.error(
+          `skipped ${p.id}: no verbatim match in ${p.source?.file ?? 'any file'}. ` +
+          'Either the document moved under the cached scan (re-run :scan), or the claim was ' +
+          'joined across a line wrap and has no single-line span to replace. Nothing was written for it.'
+        );
       }
     }
   } else {

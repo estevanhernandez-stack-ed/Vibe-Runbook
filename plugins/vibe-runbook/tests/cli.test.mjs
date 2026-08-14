@@ -481,3 +481,42 @@ test('remediate reports a pin it cannot rewrite instead of inventing a command',
   expect(out).toContain('config.pins.revision');
   expect(out).not.toContain('gcloud');
 });
+
+// Found live, running --apply against the real STAR fixture after wiring Fix 4:
+// extraction joins a claim across a line wrap, so a pin like STAR's HEAD --
+// "HEAD" ending one line, "`0855bd2`" opening the next under a `> ` prefix --
+// is a correct claim with no verbatim single-line span in the file. Rewriting
+// it means rewriting the wrap, which is not a thing to guess at inside
+// somebody's runbook. It must be skipped, named, and leave the file untouched.
+test('a claim joined across a line wrap is skipped and named, never guessed into the file', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-wrap-'));
+  const runbook = join(project, 'runbook.md');
+  const original = '# Ops\n\n> what is deployed, HEAD\n> `0855bd2`, and nothing else.\n';
+  writeFileSync(runbook, original);
+  mkdirSync(join(project, '.vibe-runbook', 'state'), { recursive: true });
+  writeFileSync(
+    join(project, '.vibe-runbook', 'state', 'claims.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0', runbook,
+      coverage: { extracted: 1, markedBlocks: 1, totalBlocks: 4, confidence: 'high', guidance: null },
+      claims: [{
+        id: 'c-002', shape: 'pin', venue: 'executable', text: 'HEAD `0855bd2`',
+        cost: { raw: null, count: null }, verdict: 'FAIL',
+        evidence: 'runbook says 0855bd2, system says a81ac10',
+        checkedAt: null, source: { file: runbook, line: 3 },
+      }],
+    }, null, 2),
+  );
+  writeFileSync(
+    join(project, '.vibe-runbook', 'config.json'),
+    JSON.stringify({ pins: { head: 'git rev-parse --short HEAD' } }, null, 2),
+  );
+
+  const proc = execFileSync('node', [cli, 'remediate', '--project', project, '--apply'], {
+    cwd: pluginDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  expect(readFileSync(runbook, 'utf8')).toBe(original);
+  expect(readdirSync(project).some((f) => f.endsWith('.bak'))).toBe(false);
+  expect(proc).not.toContain('git rev-parse');
+});
