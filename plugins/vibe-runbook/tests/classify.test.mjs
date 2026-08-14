@@ -42,3 +42,18 @@ test('surrounding markdown emphasis and code delimiters do not block classificat
   expect(classifyShape('`HEAD 0855bd2`').shape).toBe('pin');
   expect(classifyShape('**931 tests green**').shape).toBe('pin');
 });
+
+// Regression for a real bug: the old check was "starts with X and ends with
+// X", which is fooled by two unrelated spans sitting at a string's two
+// edges. Neither of these is a single wrapped span — each is two spans
+// around ordinary joined prose (exactly the shape a joined **Right:**/
+// **Wrong:** sentence can produce, e.g. "**Right:** `GET /health` returns
+// `200`" — a completely ordinary runbook line) — and stripping the outer
+// pair would glue unrelated content together and misfire the pin rule.
+test('two unrelated delimited spans at a string\'s edges do not get treated as one wrap', () => {
+  const backtickCase = classifyShape('`revision` is old, see `abc`');
+  expect(backtickCase.shape).toBe('unknown');
+
+  const boldCase = classifyShape('**Revision** is stale, see **HEAD**');
+  expect(boldCase.shape).toBe('unknown');
+});

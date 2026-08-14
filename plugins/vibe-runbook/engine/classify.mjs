@@ -45,17 +45,34 @@ export const RULES = [
 // not decoration, and is left alone. "**Revision `star-00049-j5r`**" loses
 // its outer `**` and stops there, because the remaining string starts with
 // "R" — the inner backticks around the id are never touched.
-const WRAPS = [/^\*\*(.+)\*\*$/s, /^__(.+)__$/s, /^\*(.+)\*$/s, /^_(.+)_$/s, /^`(.+)`$/s];
+//
+// "Wraps the entire string" is enforced, not assumed: a delimiter counts as
+// a wrap only if it occurs *exactly* at the two ends and nowhere else. A
+// naive "starts with X and ends with X" check (what this used to be) is
+// fooled by two unrelated spans sitting at a string's edges —
+// "`revision` is old, see `abc`" starts and ends with a backtick, but it is
+// two spans, not one, and stripping the outer pair would glue unrelated
+// prose into the match. unwrapOnce rejects that case by checking the
+// delimiter doesn't reappear anywhere inside.
+const WRAP_DELIMS = ['**', '__', '*', '_', '`'];
+
+function unwrapOnce(s, delim) {
+  if (s.length < delim.length * 2 + 1) return null;
+  if (!s.startsWith(delim) || !s.endsWith(delim)) return null;
+  const inner = s.slice(delim.length, s.length - delim.length);
+  if (inner.includes(delim)) return null;
+  return inner;
+}
 
 function stripOuterMarkup(text) {
   let s = text.trim();
   let changed = true;
   while (changed) {
     changed = false;
-    for (const re of WRAPS) {
-      const m = s.match(re);
-      if (m) {
-        s = m[1].trim();
+    for (const delim of WRAP_DELIMS) {
+      const inner = unwrapOnce(s, delim);
+      if (inner !== null) {
+        s = inner.trim();
         changed = true;
         break;
       }
