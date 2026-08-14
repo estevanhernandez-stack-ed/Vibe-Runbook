@@ -16,6 +16,18 @@ export function renderReport({ runbook, env, claims, coverage }) {
     );
   }
 
+  // A different fraction from the one below, on purpose: this is how much of
+  // the document was ever recognized as a checkable claim, not how many of
+  // the recognized claims got verified. Rendered at every confidence level,
+  // not only 'low' -- the 'low' threshold is 2%, so a document at 7% (1 real
+  // marker in 13 blocks) still reads 'high' and would otherwise say nothing
+  // about the 12 blocks nobody looked at. That silence is the exact failure
+  // this tool exists to catch, so it cannot be conditional.
+  const hasBlockCounts = typeof coverage?.totalBlocks === 'number' && typeof coverage?.markedBlocks === 'number';
+  if (hasBlockCounts) {
+    out.push(`**read ${coverage.markedBlocks} of ${coverage.totalBlocks} content blocks in the document**`, '');
+  }
+
   out.push(`**checked ${s.coverage.checked} of ${s.coverage.total} enumerated**`, '');
   for (const [state, n] of Object.entries(s.counts)) {
     if (n > 0) out.push(`- ${state}: ${n}`);
