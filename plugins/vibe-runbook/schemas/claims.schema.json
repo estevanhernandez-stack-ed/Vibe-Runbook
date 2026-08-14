@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "vibe-runbook claims",
+  "type": "object",
+  "required": ["schemaVersion", "runbook", "coverage", "claims"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "runbook": { "type": "string" },
+    "coverage": {
+      "type": "object",
+      "required": ["extracted", "markedBlocks", "totalBlocks", "confidence"],
+      "properties": {
+        "extracted": { "type": "integer" },
+        "markedBlocks": { "type": "integer" },
+        "totalBlocks": { "type": "integer" },
+        "confidence": { "enum": ["high", "low"] },
+        "guidance": { "type": ["string", "null"] }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "text", "shape", "venue", "cost", "verdict"],
+        "properties": {
+          "id": { "type": "string" },
+          "source": {
+            "type": "object",
+            "required": ["file", "line"],
+            "properties": { "file": { "type": "string" }, "line": { "type": "integer" } }
+          },
+          "text": { "type": "string" },
+          "marker": { "type": "string" },
+          "shape": { "enum": ["pin", "status-assertion", "receipt", "human", "unknown"] },
+          "confidence": { "type": "number" },
+          "classifierRule": { "type": "string" },
+          "venue": { "enum": ["executable", "static"] },
+          "cost": {
+            "type": "object",
+            "properties": { "raw": { "type": ["string", "null"] }, "count": { "type": ["integer", "null"] } }
+          },
+          "verdict": { "enum": ["PASS", "FAIL", "BLOCKED", "SPENDS", "HUMAN", "QUESTION", null] },
+          "evidence": { "type": ["string", "null"] },
+          "checkedAt": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
