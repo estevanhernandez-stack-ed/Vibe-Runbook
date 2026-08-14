@@ -46,3 +46,28 @@ test('summarize totals what a full walk would have cost, grouped by raw unit', (
   expect(s.counts.SPENDS).toBe(2);
   expect(s.wouldCost).toEqual({ 'spends one check': 2 });
 });
+
+// The shape check must run before the cost check and before the check result
+// is consulted at all. A receipt with a nonzero cost and a failing check is
+// still QUESTION -- not SPENDS, not FAIL. If a future refactor reorders the
+// shape check against the cost check, this is the test that catches it while
+// every other test in this file stays green.
+test('a receipt with a nonzero cost and a failing check is still QUESTION, not SPENDS or FAIL', () => {
+  const c = assignVerdict(
+    { ...base, shape: 'receipt', cost: { raw: 'spends one check', count: 1 } },
+    { ok: false, evidence: 'now 12, was 17' }
+  );
+  expect(c.verdict).toBe('QUESTION');
+  expect(c.verdict).not.toBe('SPENDS');
+  expect(c.verdict).not.toBe('FAIL');
+});
+
+test('summarize handles a claim with a null cost.raw without a "null" key or throwing', () => {
+  expect(() =>
+    summarize([{ shape: 'unknown', verdict: 'QUESTION', cost: { raw: null, count: null } }])
+  ).not.toThrow();
+
+  const s = summarize([{ shape: 'unknown', verdict: 'QUESTION', cost: { raw: null, count: null } }]);
+  expect(s.wouldCost).toEqual({});
+  expect(Object.prototype.hasOwnProperty.call(s.wouldCost, 'null')).toBe(false);
+});

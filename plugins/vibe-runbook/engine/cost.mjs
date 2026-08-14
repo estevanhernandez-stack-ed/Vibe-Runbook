@@ -1,5 +1,4 @@
 const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5 };
-const COST_RE = /(no spend|spends?\s+[\w\d]+(?:\s+\w+)?|[\w\s]*\bspends?\b[\w\s]*)/i;
 
 export function parseCost(sectionText) {
   const segments = String(sectionText).split('·').map((s) => s.trim());
