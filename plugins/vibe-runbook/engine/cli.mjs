@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { scanRunbook } from './scan.mjs';
 import { preflight } from './preflight.mjs';
 import { verifyPin, verifyStatus } from './verify.mjs';
@@ -29,6 +30,14 @@ const credentialFor = (env) => {
 // assumption, and the platform difference in one move. A 10s AbortSignal
 // keeps a dead or slow endpoint from ever hanging a walk the way the old
 // binding just did.
+//
+// This function itself is intentionally thin and is NOT covered by the
+// suite (2026-08-14 re-review #3): exercising it for real needs either a
+// live network call or a loopback socket, and this dev sandbox cannot even
+// route loopback between a spawned child process and a server its own
+// parent bound (confirmed directly while building the previous round's
+// fix). What the tests cover instead is runWalk below, via an injected
+// `probeUrl` stub -- the actual wiring that can break.
 async function fetchStatus(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   return res.status;
@@ -61,46 +70,22 @@ function resolveUrl(claim, config) {
   return config.urls?.[claim.id] ?? null;
 }
 
-const command = process.argv[2];
-
-if (command === 'scan') {
-  const runbook = arg('runbook');
-  if (!runbook) { console.error('scan needs --runbook <path>'); process.exit(1); }
-  const out = scanRunbook(readFileSync(runbook, 'utf8'), runbook);
-  const dest = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
-  mkdirSync(dirname(dest), { recursive: true });
-  writeFileSync(dest, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
-  console.log(`scanned ${out.claims.length} claims, confidence ${out.coverage.confidence}`);
-} else if (command === 'walk') {
-  const env = arg('env');
-  if (!env) { console.error('walk needs --env <name>; there is no default environment'); process.exit(1); }
-
-  const statePath = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
-  let state;
-  try {
-    state = JSON.parse(readFileSync(statePath, 'utf8'));
-  } catch {
-    console.error('no cached scan; run `vibe-runbook scan --runbook <path>` first');
-    process.exit(1);
-  }
-
-  const pre = preflight({ env, credentialCheck: () => credentialFor(env) });
-  if (!pre.ok) {
-    console.error(`BLOCKED: ${pre.blocked}`);
-    console.error(`ask: ${pre.ask}`);
-    process.exit(1);
-  }
-
-  const config = loadConfig();
-
+// The walk orchestration, parameterized by every side-effecting dependency
+// -- a command runner and a url prober -- exactly the way verifyPin and
+// verifyStatus already take theirs. This is the seam the suite actually
+// tests (2026-08-14 re-review #3): inject a stub `probeUrl`, assert that
+// what it returns drives the verdict, no network and no shell involved. The
+// CLI entry point below is the only caller that passes the real bindings
+// (shell, fetchStatus).
+export async function runWalk(state, config, { runCommand, probeUrl }) {
   // verifyStatus calls its httpProbe argument synchronously and expects a
   // return value back, not a Promise -- that contract in verify.mjs does
-  // not change. fetch is inherently async, so every reachable url is
-  // probed up front, here, where `await` is available (this file is an ES
-  // module; top-level await works). The function actually handed to
-  // verifyStatus below is a plain synchronous lookup into what was already
-  // fetched -- a cost-flagged or unresolvable url is never in this map, so
-  // it is never probed either.
+  // not change. probeUrl is inherently async (fetch, or a stub standing in
+  // for it), so every reachable url is probed up front, here, before the
+  // synchronous pass below. The function actually handed to verifyStatus
+  // is a plain synchronous lookup into what was already probed -- a
+  // cost-flagged or unresolvable url is never in this map, so it is never
+  // probed either.
   const probeResults = new Map();
   for (const c of state.claims) {
     if (c.shape !== 'status-assertion') continue;
@@ -108,7 +93,7 @@ if (command === 'scan') {
     const url = resolveUrl(c, config);
     if (!url || probeResults.has(url)) continue;
     try {
-      probeResults.set(url, { status: await fetchStatus(url) });
+      probeResults.set(url, { status: await probeUrl(url) });
     } catch (e) {
       probeResults.set(url, { error: e });
     }
@@ -119,7 +104,7 @@ if (command === 'scan') {
     return r?.status;
   };
 
-  const walked = state.claims.map((c) => {
+  return state.claims.map((c) => {
     // Gate BEFORE the call, not after. `assignVerdict(c, verifyPin(...))`
     // evaluates `verifyPin(...)` as a normal JS argument before
     // `assignVerdict` is ever entered, so assignVerdict's own cost check
@@ -127,17 +112,61 @@ if (command === 'scan') {
     // stop (Fix 1, 2026-08-14 review, caught live with a sentinel file). A
     // cost-flagged claim must never reach a verifier at all.
     if ((c.cost?.count ?? 0) > 0) return assignVerdict(c, null);
-    if (c.shape === 'pin') return assignVerdict(c, verifyPin(c, { runCommand: shell, config }));
+    if (c.shape === 'pin') return assignVerdict(c, verifyPin(c, { runCommand, config }));
     if (c.shape === 'status-assertion') {
       const withUrl = { ...c, url: resolveUrl(c, config) };
       return assignVerdict(withUrl, verifyStatus(withUrl, { httpProbe: probe }));
     }
     return assignVerdict(c, null);
   });
+}
 
-  writeFileSync(statePath, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
-  console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
-} else {
-  console.error('usage: vibe-runbook <scan|walk> [--runbook <path>] [--env <name>]');
-  process.exit(1);
+// Guards the CLI dispatch below so importing this file (as tests import
+// runWalk) never runs it -- only executing it directly, as the entry
+// point, does. Paths are resolved through path.resolve rather than
+// compared as raw strings because process.argv[1] and import.meta.url
+// disagree on separators and URL-encoding on Windows.
+const isMain =
+  process.argv[1] && resolvePath(process.argv[1]) === resolvePath(fileURLToPath(import.meta.url));
+
+if (isMain) {
+  const command = process.argv[2];
+
+  if (command === 'scan') {
+    const runbook = arg('runbook');
+    if (!runbook) { console.error('scan needs --runbook <path>'); process.exit(1); }
+    const out = scanRunbook(readFileSync(runbook, 'utf8'), runbook);
+    const dest = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
+    console.log(`scanned ${out.claims.length} claims, confidence ${out.coverage.confidence}`);
+  } else if (command === 'walk') {
+    const env = arg('env');
+    if (!env) { console.error('walk needs --env <name>; there is no default environment'); process.exit(1); }
+
+    const statePath = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
+    let state;
+    try {
+      state = JSON.parse(readFileSync(statePath, 'utf8'));
+    } catch {
+      console.error('no cached scan; run `vibe-runbook scan --runbook <path>` first');
+      process.exit(1);
+    }
+
+    const pre = preflight({ env, credentialCheck: () => credentialFor(env) });
+    if (!pre.ok) {
+      console.error(`BLOCKED: ${pre.blocked}`);
+      console.error(`ask: ${pre.ask}`);
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const walked = await runWalk(state, config, { runCommand: shell, probeUrl: fetchStatus });
+
+    writeFileSync(statePath, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
+    console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
+  } else {
+    console.error('usage: vibe-runbook <scan|walk> [--runbook <path>] [--env <name>]');
+    process.exit(1);
+  }
 }

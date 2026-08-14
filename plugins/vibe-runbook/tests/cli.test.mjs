@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runWalk } from '../engine/cli.mjs';
 
 const cli = fileURLToPath(new URL('../engine/cli.mjs', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/star-smoke.md', import.meta.url));
@@ -134,72 +135,87 @@ test('a pin missing both a self-answer and a config entry is an actionable BLOCK
   expect(report).toContain('config.pins');
 });
 
-test("a status assertion's url resolves from config.urls before verifyStatus runs", () => {
-  const { claims } = walkDir({
-    claims: [
-      {
-        id: 'c-6', shape: 'status-assertion', venue: 'executable', text: 'answers 200 ok',
-        cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
-        source: { file: 'runbook.md', line: 1 },
-      },
-    ],
-    config: { urls: { 'c-6': 'http://127.0.0.1:1/unreachable' } },
+// Fix 2026-08-14 re-review #3, caught by the network-guard verification run
+// itself: this test used to point at a deliberately-unreachable local port
+// (127.0.0.1:1) on the theory that a refused connection never really
+// "touches the network." It still called the real fetchStatus binding
+// through the real CLI subprocess, and a global fetch guard confirmed it
+// really does call fetch() -- the guard tripped on this exact test before
+// the connection was ever refused. Rewritten through runWalk with a stub
+// probeUrl that records what url it was called with: proves resolution
+// reaches the actual probe call (stronger than the old test, which only
+// checked the persisted claim), with no fetch() invocation of any kind.
+test("a status assertion's url resolves from config.urls and reaches the probe call", async () => {
+  const state = { claims: [statusClaim('c-6', undefined)] };
+  const config = { urls: { 'c-6': 'https://stub.invalid/health' } };
+  let probedWith = null;
+  const walked = await runWalk(state, config, {
+    runCommand: () => {},
+    probeUrl: async (url) => { probedWith = url; return 401; },
   });
-  // The url made it onto the claim -- resolution happened -- regardless of
-  // whether the probe against a deliberately-unreachable port can complete.
-  expect(claims[0].url).toBe('http://127.0.0.1:1/unreachable');
-  expect(claims[0].verdict).not.toBe(null);
+  expect(probedWith).toBe('https://stub.invalid/health');
+  expect(walked[0].url).toBe('https://stub.invalid/health');
   // Whatever the outcome, it must not be the specific "nothing to check"
   // failure Fix 3 exists to close.
-  expect(claims[0].evidence ?? '').not.toMatch(/no url for this status assertion/i);
+  expect(walked[0].evidence ?? '').not.toMatch(/no url for this status assertion/i);
 });
 
-// Fix 1 (2026-08-14 re-review #2): the previous probe() shelled to
-// `curl -s -o /dev/null ...`, which was broken on Windows two ways --
-// nonzero exit against an unreachable target regardless of reachability,
-// and an outright hang against a REAL reachable one (both confirmed
-// directly with a throwaway script, not assumed). The natural test here
-// would spin up a local server and point `walk` at it, but this dev
-// sandbox itself cannot route 127.0.0.1 between a spawned child process
-// and the server its parent bound -- confirmed directly too: identical
-// hang for both curl and fetch against a same-machine sibling-process
-// server, sandbox flag on or off, while a spawned child reaching a real
-// external host works fine every time. So these two use a real, stable
-// external target (example.com, IANA's reserved documentation domain --
-// not going anywhere, not rate-limited) to prove fetch genuinely completes
-// a round trip and reports the true status, which is what this fix is
-// actually about: PASS wasn't previously reachable on Windows at all.
-test('walk probes a status assertion with fetch and PASSes on a real match, no shell involved', () => {
-  const { claims } = walkDir({
-    claims: [
-      {
-        id: 'c-8', shape: 'status-assertion', venue: 'executable', text: 'answers 200 ok',
-        cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
-        source: { file: 'runbook.md', line: 1 },
-      },
-    ],
-    config: { urls: { 'c-8': 'https://example.com/' } },
-  });
-  expect(claims[0].verdict).toBe('PASS');
-  expect(claims[0].evidence).toContain('200');
+// Fix 1 (2026-08-14 re-review #3): the previous version of this test hit a
+// real external host (example.com) to work around this sandbox being unable
+// to route loopback between a spawned child process and a server its own
+// parent bound (see fetchStatus's comment in cli.mjs). That was still a
+// network-touching test -- it would fail on a plane, flake behind a
+// corporate proxy, and send real traffic on every `npm test`. This tests
+// the actual seam instead: `runWalk` takes an injected `probeUrl`, the same
+// way verifyPin and verifyStatus already take injected dependencies, so the
+// wiring is provable with a stub and no network at all. What can break here
+// is cli.mjs's own glue (the probeResults map, the sync lookup closure
+// handed to verifyStatus) -- not whether the real internet is up.
+function statusClaim(id, url) {
+  return {
+    id, shape: 'status-assertion', venue: 'executable', text: 'answers 401 unauthenticated', url,
+    cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
+    source: { file: 'runbook.md', line: 1 },
+  };
+}
+
+test('a stub probe returning the code the claim expects drives a PASS verdict', async () => {
+  const state = { claims: [statusClaim('c-8', 'https://stub.invalid/health')] };
+  const walked = await runWalk(state, {}, { runCommand: () => {}, probeUrl: async () => 401 });
+  expect(walked[0].verdict).toBe('PASS');
+  expect(walked[0].evidence).toContain('401');
 });
 
-// A status assertion that disagrees with the live system is a FAIL, not a
-// BLOCKED -- fetch has to surface the real mismatched code, not just "it
-// connected."
-test('walk probes a status assertion with fetch and FAILs on a real mismatch', () => {
-  const { claims } = walkDir({
-    claims: [
-      {
-        id: 'c-9', shape: 'status-assertion', venue: 'executable', text: 'answers 200 ok',
-        cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
-        source: { file: 'runbook.md', line: 1 },
-      },
-    ],
-    config: { urls: { 'c-9': 'https://example.com/definitely-not-a-real-path-xyz123' } },
+test('a stub probe returning a different code drives a FAIL verdict', async () => {
+  const state = { claims: [statusClaim('c-9', 'https://stub.invalid/health')] };
+  const walked = await runWalk(state, {}, { runCommand: () => {}, probeUrl: async () => 422 });
+  expect(walked[0].verdict).toBe('FAIL');
+  expect(walked[0].evidence).toContain('422');
+});
+
+test('a stub probe that throws drives a BLOCKED verdict, not a crash', async () => {
+  const state = { claims: [statusClaim('c-10', 'https://stub.invalid/health')] };
+  const walked = await runWalk(state, {}, {
+    runCommand: () => {},
+    probeUrl: async () => { throw new Error('ECONNREFUSED'); },
   });
-  expect(claims[0].verdict).toBe('FAIL');
-  expect(claims[0].evidence).toContain('404');
+  expect(walked[0].verdict).toBe('BLOCKED');
+  expect(walked[0].evidence).toMatch(/ECONNREFUSED/);
+});
+
+// A cost-flagged status assertion must never reach probeUrl at all -- same
+// invariant as the pin-side sentinel test above, proven here for the
+// status-assertion path specifically since it has its own gate inside
+// runWalk (the pre-fetch loop), not only the one in the final .map().
+test('runWalk never calls probeUrl for a status assertion that would spend', async () => {
+  let calls = 0;
+  const claim = { ...statusClaim('c-11', 'https://stub.invalid/health'), cost: { raw: 'spends one check', count: 1 } };
+  const walked = await runWalk({ claims: [claim] }, {}, {
+    runCommand: () => {},
+    probeUrl: async () => { calls += 1; return 401; },
+  });
+  expect(walked[0].verdict).toBe('SPENDS');
+  expect(calls).toBe(0);
 });
 
 test('a status assertion with no resolvable url is an actionable BLOCKED', () => {
