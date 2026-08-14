@@ -5,6 +5,21 @@ description: Internal reference loaded by every vibe-runbook command skill. Pers
 
 # vibe-runbook guide
 
+## The engine, and where it runs
+
+Every command skill runs the engine rather than performing its job by hand:
+
+```
+cd ${CLAUDE_PLUGIN_ROOT}
+node engine/cli.mjs <scan|walk|remediate> [--runbook <path>] [--env <name>] --project <path> [--apply]
+```
+
+`--project` is the user's project root and it is load-bearing on every
+invocation. It defaults to the working directory, and the working directory is
+the plugin's own — omit it and state, config, and every pin command land in the
+installed plugin instead of the user's repo. `--apply` exists only on
+`remediate`, and only an explicit user yes puts it on the line.
+
 ## Posture
 
 A runbook is a test spec. The running system is the system under test. Every
