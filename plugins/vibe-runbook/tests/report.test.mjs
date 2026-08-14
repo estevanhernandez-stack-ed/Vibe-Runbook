@@ -79,3 +79,49 @@ test('does not fabricate a block-density line when coverage carries no block cou
   expect(out).not.toMatch(/read .* content blocks/);
   expect(out).not.toContain('undefined');
 });
+
+// Fix 2 (2026-08-14 review): a BLOCKED verdict caused by a gap this tool
+// could have been told to close -- no command for a pin, no url for a
+// status assertion -- must not dead-end the reader. Genuine environment
+// blockers (a failed probe, a broken command) get no invented config fix,
+// because there is nothing to configure that helps.
+test('a BLOCKED pin missing a command gets a concrete next step, not a dead end', () => {
+  const blocked = [
+    {
+      id: 'c-010', shape: 'pin', venue: 'executable', text: 'Revision `x`',
+      verdict: 'BLOCKED', evidence: 'no command for this pin; remediate it or add one to config.pins',
+      cost: { raw: null, count: null },
+    },
+  ];
+  const out = renderReport({ runbook: 'r.md', env: 'live', claims: blocked, coverage: {} });
+  expect(out).toMatch(/Needs your input to check/);
+  expect(out).toContain('config.pins');
+  expect(out).toMatch(/:remediate/);
+});
+
+test('a BLOCKED status assertion missing a url gets a concrete next step', () => {
+  const blocked = [
+    {
+      id: 'c-011', shape: 'status-assertion', text: 'answers 401 unauthenticated',
+      verdict: 'BLOCKED', evidence: 'no url for this status assertion',
+      cost: { raw: null, count: null },
+    },
+  ];
+  const out = renderReport({ runbook: 'r.md', env: 'live', claims: blocked, coverage: {} });
+  expect(out).toMatch(/Needs your input to check/);
+  expect(out).toContain('config.json');
+  expect(out).toMatch(/urls/);
+});
+
+test('a genuine environment blocker is reported but not given a config fix it cannot use', () => {
+  const blocked = [
+    {
+      id: 'c-012', shape: 'pin', venue: 'executable', text: 'Revision `x`',
+      verdict: 'BLOCKED', evidence: 'command failed: not authenticated',
+      cost: { raw: null, count: null },
+    },
+  ];
+  const out = renderReport({ runbook: 'r.md', env: 'live', claims: blocked, coverage: {} });
+  expect(out).not.toMatch(/Needs your input to check/);
+  expect(out).toContain('- BLOCKED: 1');
+});

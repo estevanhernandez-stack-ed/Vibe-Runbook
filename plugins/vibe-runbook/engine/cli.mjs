@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { scanRunbook } from './scan.mjs';
@@ -26,6 +26,28 @@ const probe = (url) => {
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? undefined : process.argv[i + 1];
+}
+
+// Local house style, not the environment's. Absent config is normal -- most
+// runbooks are walked without one, and this is the only place that has to
+// know the difference between "no file" and "malformed file" (Fix 2,
+// 2026-08-14 review: nothing previously read this file at all, so
+// verifyPin's config.pins fallback was unreachable dead code).
+function loadConfig() {
+  const configPath = join(process.cwd(), '.vibe-runbook', 'config.json');
+  if (!existsSync(configPath)) return {};
+  return JSON.parse(readFileSync(configPath, 'utf8'));
+}
+
+// Pins key their config entry by label (verify.mjs's resolveCommand does the
+// same split on the claim text). A status assertion is usually a full
+// sentence with no such label -- "Every new route answers 401" has nothing
+// to split on -- so this keys by claim id instead, which is stable across a
+// scan-then-walk because ids are assigned once, at scan time (Fix 3,
+// 2026-08-14 review).
+function resolveUrl(claim, config) {
+  if (claim.url) return claim.url;
+  return config.urls?.[claim.id] ?? null;
 }
 
 const command = process.argv[2];
@@ -58,9 +80,21 @@ if (command === 'scan') {
     process.exit(1);
   }
 
+  const config = loadConfig();
+
   const walked = state.claims.map((c) => {
-    if (c.shape === 'pin') return assignVerdict(c, verifyPin(c, { runCommand: shell }));
-    if (c.shape === 'status-assertion') return assignVerdict(c, verifyStatus(c, { httpProbe: probe }));
+    // Gate BEFORE the call, not after. `assignVerdict(c, verifyPin(...))`
+    // evaluates `verifyPin(...)` as a normal JS argument before
+    // `assignVerdict` is ever entered, so assignVerdict's own cost check
+    // (verdict.mjs) always ran too late to stop the spend it exists to
+    // stop (Fix 1, 2026-08-14 review, caught live with a sentinel file). A
+    // cost-flagged claim must never reach a verifier at all.
+    if ((c.cost?.count ?? 0) > 0) return assignVerdict(c, null);
+    if (c.shape === 'pin') return assignVerdict(c, verifyPin(c, { runCommand: shell, config }));
+    if (c.shape === 'status-assertion') {
+      const withUrl = { ...c, url: resolveUrl(c, config) };
+      return assignVerdict(withUrl, verifyStatus(withUrl, { httpProbe: probe }));
+    }
     return assignVerdict(c, null);
   });
 
