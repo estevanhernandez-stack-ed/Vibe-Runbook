@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -390,4 +390,94 @@ test('walk reads state and config from --project, and writes the walked claims b
   expect(written.claims[0].verdict).toBe('PASS');
   expect(report).toContain('9.9.9');
   expect(existsSync(join(pluginDir, '.vibe-runbook'))).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Fix 4 (2026-08-14 final review): the command surface, the SKILL and every
+// walk report all named /vibe-runbook:remediate, and cli.mjs dispatched `scan`
+// and `walk` only. This is the plugin's one mutating path, so the guard on it
+// -- diffs by default, writes only on an explicit flag -- is the behavior
+// under test, not a detail of it.
+// ---------------------------------------------------------------------------
+
+function remediateDir() {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-rem-'));
+  const runbook = join(project, 'runbook.md');
+  writeFileSync(runbook, '# Ops\n\n> **Revision `star-00049-j5r`** is what is deployed.\n');
+  mkdirSync(join(project, '.vibe-runbook', 'state'), { recursive: true });
+  writeFileSync(
+    join(project, '.vibe-runbook', 'state', 'claims.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0',
+      runbook,
+      coverage: { extracted: 1, markedBlocks: 1, totalBlocks: 3, confidence: 'high', guidance: null },
+      claims: [{
+        id: 'c-001', shape: 'pin', venue: 'executable', text: '**Revision `star-00049-j5r`**',
+        cost: { raw: null, count: null }, verdict: 'FAIL',
+        evidence: 'runbook says star-00049-j5r, system says star-00099-NEW',
+        checkedAt: null, source: { file: runbook, line: 3 },
+      }],
+    }, null, 2),
+  );
+  writeFileSync(
+    join(project, '.vibe-runbook', 'config.json'),
+    JSON.stringify({ pins: { revision: 'gcloud run services describe star' } }, null, 2),
+  );
+  return { project, runbook };
+}
+
+const runRemediate = (project, extra = []) =>
+  execFileSync('node', [cli, 'remediate', '--project', project, ...extra], {
+    cwd: pluginDir, encoding: 'utf8',
+  });
+
+test('remediate prints the diff and changes nothing', () => {
+  const { project, runbook } = remediateDir();
+  const before = readFileSync(runbook, 'utf8');
+
+  const out = runRemediate(project);
+
+  expect(out).toContain('value-to-command');
+  expect(out).toContain('gcloud run services describe star');
+  expect(out).toMatch(/nothing was written/i);
+  expect(readFileSync(runbook, 'utf8')).toBe(before);
+});
+
+test('remediate --apply writes the rewrite, and backs the file up first', () => {
+  const { project, runbook } = remediateDir();
+  const before = readFileSync(runbook, 'utf8');
+
+  const out = runRemediate(project, ['--apply']);
+
+  const after = readFileSync(runbook, 'utf8');
+  expect(after).toContain('Revision — run: `gcloud run services describe star`');
+  expect(after).not.toContain('star-00049-j5r');
+  expect(out).toMatch(/backed up/i);
+
+  const backup = readdirSync(project).find((f) => f.includes('.vibe-runbook-') && f.endsWith('.bak'));
+  expect(backup).toBeDefined();
+  expect(readFileSync(join(project, backup), 'utf8')).toBe(before);
+});
+
+test('remediate without a cached scan says which command to run first, and exits nonzero', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-rem-bare-'));
+  let err;
+  try {
+    runRemediate(project);
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeDefined();
+  expect(String(err.stderr)).toMatch(/scan/);
+});
+
+test('remediate reports a pin it cannot rewrite instead of inventing a command', () => {
+  const { project } = remediateDir();
+  writeFileSync(join(project, '.vibe-runbook', 'config.json'), JSON.stringify({}, null, 2));
+
+  const out = runRemediate(project);
+
+  expect(out).toMatch(/Cannot rewrite without you/);
+  expect(out).toContain('config.pins.revision');
+  expect(out).not.toContain('gcloud');
 });

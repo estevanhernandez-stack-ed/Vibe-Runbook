@@ -24,6 +24,14 @@ export function expectedCode(text) {
 // version string as a command is the failure mode that guards against.
 const SELF_ANSWERING_RE = /run:\s*`([^`]+)`/i;
 
+// Exported so remediation can tell a pin that already names its command apart
+// from one that still stores a value. A self-answering pin is where this
+// plugin is trying to get every pin to; proposing a rewrite for it would be
+// rewriting the destination.
+export function isSelfAnswering(claim) {
+  return SELF_ANSWERING_RE.test(claim.text ?? '');
+}
+
 // Where a pin's command comes from, in order:
 //   1. The pin itself, if it has already been remediated with a `run:`
 //      marker. See verifyPin below -- this case is self-answering and

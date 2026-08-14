@@ -7,10 +7,37 @@ description: This skill should be used when the user says "/vibe-runbook:remedia
 
 Load skills/guide/SKILL.md. Requires a completed walk.
 
-1. For every FAILed pin, pick the template by venue. Executable venue takes
-   `value-to-command`; static venue takes `name-not-count`.
-2. Never invent the context. A `value-to-command` rewrite needs the actual
-   command, and a `name-not-count` rewrite needs the actual members. If you do
-   not have them, say so and stop.
-3. Show every diff before writing. Back up each file first.
+Run the engine. Never hand-roll the rewrite — the templates, the venue rule,
+the backup and the verbatim file match are all in the engine, and a hand-rolled
+edit bypasses every one of them.
+
+```
+cd ${CLAUDE_PLUGIN_ROOT}
+node engine/cli.mjs remediate --project <path to the user's project>
+```
+
+That prints every diff and writes nothing. Read the diffs out to the user.
+
+1. **Under "Cannot rewrite without you"**, the engine refused to guess. A
+   `value-to-command` rewrite needs the real command and a `name-not-count`
+   rewrite needs the real members; neither is ever invented. Each entry names
+   the exact config key to add:
+   - a command → `config.pins.<label>` in `<project>/.vibe-runbook/config.json`
+   - the members → `config.members.<claim id>` in the same file
+
+   Get them from the user or from the contract source, add them, and re-run.
+2. **Only after the user says yes**, write:
+
+   ```
+   node engine/cli.mjs remediate --project <path> --apply
+   ```
+
+   Each file is backed up before its first write and the backup paths are
+   printed. Roll back by copying a backup over the file it names.
+3. A claim whose text no longer appears in its file is skipped and named, not
+   guessed at. That means the document moved under the cached scan — re-run
+   `:scan` and walk again before remediating.
 4. Report the backup paths so a rollback is one step.
+
+`--apply` is the only difference between reading and writing. Never add it
+because a walk found something; add it because the user asked for it.

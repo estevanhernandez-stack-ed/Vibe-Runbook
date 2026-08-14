@@ -8,6 +8,8 @@ import { preflight } from './preflight.mjs';
 import { verifyPin, verifyStatus } from './verify.mjs';
 import { assignVerdict } from './verdict.mjs';
 import { renderReport } from './report.mjs';
+import { planRemediation, renderPlan } from './remediate.mjs';
+import { backupFile } from './backup.mjs';
 
 // Bound to the project root, not to wherever the engine happens to be running
 // from (Fix 5, 2026-08-14 final review). A pin's verification command is
@@ -214,9 +216,56 @@ if (isMain) {
 
     writeFileSync(dest, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
     console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
+  } else if (command === 'remediate') {
+    // The only mutating path in the plugin, and the posture is the point: the
+    // default prints diffs and does nothing at all. `--apply` is the whole
+    // difference between reading and writing, which is why it has to be typed
+    // (Fix 4, 2026-08-14 final review -- this command was advertised in the
+    // command surface, in its SKILL, and twice in every walk report, with no
+    // entry point anywhere; an agent asked for it would hand-roll the rewrite
+    // and bypass the tested, backed-up implementation entirely).
+    const apply = process.argv.includes('--apply');
+
+    let state;
+    try {
+      state = JSON.parse(readFileSync(statePath(root), 'utf8'));
+    } catch {
+      console.error('no cached scan; run `vibe-runbook scan --runbook <path> --project <path>` first');
+      process.exit(1);
+    }
+
+    const plan = planRemediation(state.claims ?? [], loadConfig(root));
+
+    if (!apply) {
+      console.log(renderPlan(plan, { applied: false }));
+    } else {
+      // One backup per file, taken before that file's first write, and the
+      // write itself is a verbatim match on the claim's own text. A claim
+      // whose text no longer appears in the file is reported and skipped --
+      // the document moved under the cached scan, and writing a guess into
+      // somebody's runbook is the one thing this path must never do.
+      const backups = new Map();
+      const unmatched = [];
+      for (const p of plan.proposals) {
+        const file = p.source?.file;
+        if (!file || !existsSync(file)) { unmatched.push(p); continue; }
+        const current = readFileSync(file, 'utf8');
+        if (!current.includes(p.before)) { unmatched.push(p); continue; }
+        if (!backups.has(file)) backups.set(file, backupFile(file));
+        writeFileSync(file, current.replace(p.before, p.after), 'utf8');
+      }
+      console.log(renderPlan(
+        { proposals: plan.proposals.filter((p) => !unmatched.includes(p)), needsContext: plan.needsContext },
+        { applied: true, backups: [...backups.values()] },
+      ));
+      for (const p of unmatched) {
+        console.error(`skipped ${p.id}: its text is no longer in ${p.source?.file ?? 'any file'}; re-scan first`);
+      }
+    }
   } else {
     console.error(
-      'usage: vibe-runbook <scan|walk> [--runbook <path>] [--env <name>] [--project <path>]'
+      'usage: vibe-runbook <scan|walk|remediate> [--runbook <path>] [--env <name>] ' +
+      '[--project <path>] [--apply]'
     );
     process.exit(1);
   }
