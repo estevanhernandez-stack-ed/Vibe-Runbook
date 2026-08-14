@@ -164,27 +164,37 @@ test('a ~~~ tilde fence is tracked the same way as a backtick fence', () => {
   expect(claims.length).toBe(0);
 });
 
-// Prose before and after a fence, inside the same list item, still joins as
-// one logical block -- the fence is transparent, not a unit boundary the
-// way a blank line or a new list item is.
-test('prose before and after a fence in the same list item still joins as one unit', () => {
+// Round 3 correction: round 2 had this backwards. "Prose before and after a
+// fence still joins as one unit" was itself the bug -- **Right:** the
+// endpoint answers 200 + fence + with the build sha used to glue into "the
+// endpoint answers 200 with the build sha", two non-adjacent fragments
+// joined into a string that exists nowhere in the file (the fence sits
+// physically between them in the real document). Remediation matches
+// claim.text back byte-for-byte, so a fabricated join is a permanently
+// unmatchable claim. A fence now flushes the unit it interrupts instead of
+// staying transparent to it -- text before and after a fence can never
+// share one claim's text again, even at the cost of losing this specific
+// catch (the post-fence fragment on its own is plain paragraph text, not a
+// list item, so it no longer qualifies for prose-marker scanning either;
+// accepted, see the marker-widening report).
+test('a fence flushes the unit it interrupts -- text before and after never fabricates a joined claim', () => {
   const md = [
     '# Runbook',
     '',
-    '## Example',
+    '## Health check',
     '',
-    '1. Run the health check:',
-    '   ```bash',
-    '   curl -s localhost/health',
-    '   ```',
-    '   The response should be a 200.',
+    '**Right:** the endpoint answers 200',
+    '```bash',
+    'curl -s localhost/health',
+    '```',
+    'with the build sha in the body.',
   ].join('\n');
 
   const { claims } = extractClaims(md, 'test.md');
-  const claim = claims.find((c) => c.text.includes('should be a 200'));
-  expect(claim).toBeDefined();
-  expect(claim.text).toContain('Run the health check');
-  expect(claim.text).not.toMatch(/curl/);
+  const fabricated = claims.find((c) => c.text.includes('200') && c.text.includes('build sha'));
+  expect(fabricated).toBeUndefined();
+  // The pre-fence marker is still found, on its own, with its own real text.
+  expect(claims.some((c) => c.text === 'the endpoint answers 200')).toBe(true);
 });
 
 // Table rows, per the coordinator's fix 2: "| Database | Status should be

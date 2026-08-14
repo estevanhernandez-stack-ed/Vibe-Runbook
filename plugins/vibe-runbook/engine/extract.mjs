@@ -72,18 +72,36 @@ function isTableRowStart(line) {
 }
 
 // A fence opens with 3+ backticks or 3+ tildes (CommonMark allows either,
-// and more than three). Returns the exact marker string matched so a
-// caller can require the same character and at least the same length to
-// close it -- a `~~~` block doesn't close on an unrelated ``` a shell
-// heredoc happens to contain, and vice versa.
+// and more than three), optionally followed by an info string ("```bash").
+// Indentation is capped at 3 spaces, matching CommonMark's rule for an
+// unindented-enough fence -- a 4-space indent belongs to an indented code
+// block, not a fence, and left uncapped a stray 4-space-indented ``` (an
+// author showing literal backtick syntax in a paragraph, not opening a
+// real fence) opened a phantom fence that swallowed every real line
+// written after it. Returns the exact marker string matched so a caller
+// can require the same character and at least the same length to close it
+// -- a `~~~` block doesn't close on an unrelated ``` a shell heredoc
+// happens to contain, and vice versa.
 function fenceDelimiter(line) {
-  const m = /^\s*(`{3,}|~{3,})/.exec(line);
+  const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
   return m ? m[1] : null;
 }
 
+// A closing fence is stricter than an opener: CommonMark permits *only*
+// the fence characters and trailing whitespace on a closing line, never an
+// info string. Accepting one (this function's original shape) let an
+// illustrated nested-fence example -- a runbook showing what fenced
+// markdown looks like, e.g. an outer ```markdown fence whose own body
+// shows ```bash -- close the outer fence early on its own inner-example
+// opener, expose that illustration to ordinary prose scanning, and then
+// re-open a phantom fence on what should have been the outer fence's real
+// close: parity flips, and everything written after it is silently
+// swallowed through EOF.
 function fenceCloses(line, opener) {
-  const closer = fenceDelimiter(line);
-  return closer !== null && closer[0] === opener[0] && closer.length >= opener.length;
+  const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+  if (!m) return false;
+  const closer = m[1];
+  return closer[0] === opener[0] && closer.length >= opener.length;
 }
 
 // Walks `text` once, treating a `**bold**` or `` `backtick` `` span as
@@ -160,6 +178,47 @@ function markupGuidance(filePath, totalBlocks, markedBlocks) {
   ].join('\n');
 }
 
+// A fence that opens and never closes is a structural defect, not a style
+// choice -- once `fence` is set in the walking loops below, every line
+// after it becomes invisible to both counting and unit-building, so the
+// document's tail is silently unread through EOF. countContentLines still
+// counts the swallowed lines (they were read), which is exactly what makes
+// this dangerous: a short document could lose real claims to a swallowed
+// tail and still read `confidence: 'high'`, because the denominator never
+// shrank to reveal the loss. Detected once, up front, so extractClaims can
+// refuse to report undiminished confidence over a read that quietly
+// stopped partway through. Returns the 1-indexed line the unclosed fence
+// opened on, or null if every fence in the document closed.
+function findUnterminatedFence(lines) {
+  let fence = null;
+  let openedAt = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (fence) {
+      if (fenceCloses(line, fence)) {
+        fence = null;
+        openedAt = null;
+      }
+      continue;
+    }
+    const opener = fenceDelimiter(line);
+    if (opener) {
+      fence = opener;
+      openedAt = i + 1;
+    }
+  }
+  return openedAt;
+}
+
+function unterminatedFenceGuidance(filePath, line) {
+  return [
+    `A fenced code block opened at ${filePath}:${line} was never closed. ` +
+      'Every line after it was skipped rather than read, so this result cannot ' +
+      'be trusted at whatever confidence the marker count alone would suggest.',
+    'Close the fence (matching backtick or tilde count) or remove the stray opening line, then re-run.',
+  ].join('\n');
+}
+
 // The density ratio's denominator: how much document there actually is, in
 // physical lines, independent of how extraction groups those lines into
 // claims. Grouping and counting used to be the same pass — a claim that
@@ -213,16 +272,26 @@ function groupIntoUnits(lines, startIdx, endIdxExclusive) {
     const raw = lines[i];
 
     if (fence) {
-      // Fenced content -- its own delimiters included -- is code, not
-      // prose: it never joins a unit's text and never flushes the one it
-      // sits inside, so ordinary prose immediately before and after a
-      // fence still reads as one logical block, the fence itself simply
-      // invisible to it.
+      // Fenced content is code, not prose: it never joins a unit's text.
       if (fenceCloses(raw, fence)) fence = null;
       continue;
     }
     const opener = fenceDelimiter(raw);
     if (opener) {
+      // Round 3 correction: a fence used to be transparent here -- left
+      // `cur` open so prose immediately before and after it could join
+      // into one claim. That was itself the bug. "**Right:** the endpoint
+      // answers 200" + a fence + "with the build sha" joined into "the
+      // endpoint answers 200 with the build sha", a string that exists
+      // nowhere in the file -- two fragments glued across a gap that, in
+      // the real document, has other real content sitting in it.
+      // Remediation matches claim.text back byte-for-byte, so a fabricated
+      // join is a permanently unmatchable claim. A fence now flushes the
+      // unit it interrupts, the same as a blank line or a heading: content
+      // before and after a fence can never share one claim's text again,
+      // even at the cost of a real catch split by a fence not being found
+      // (accepted; see the marker-widening report).
+      flush();
       fence = opener;
       continue;
     }
@@ -257,6 +326,39 @@ function joinUnit(unit) {
 
 function isMarkerText(text) {
   return MARKERS.some((mk) => mk.re.test(text) || mk.bareRe.test(text));
+}
+
+// Round 3, Fix 2: a bare marker's content usually lives in the very next
+// unit -- but a fence's own content never becomes a unit at all (it's
+// invisible to groupIntoUnits by design), so "**Expected:**" immediately
+// followed by a fenced JSON body used to find nothing there and produce no
+// claim, even though before this widening's fence-awareness even existed
+// it produced one. Expected-output-in-a-fence-under-an-Expected-line is
+// mainstream ops idiom, and the author wrote an explicit marker for
+// exactly this content.
+//
+// Walks the raw physical lines directly, starting right after the bare
+// marker's own unit, because that is the only place fenced content can be
+// found -- it was never assembled into a unit to look up. Requires the
+// fence to open on the very next physical line (no intervening blank
+// line): the reviewer's own example is this exact adjacency, and it is the
+// only shape that's unambiguous. Returns null (not a fabricated claim) if
+// the fence right there never closes -- that is Fix 1's job (force low
+// confidence, name the line), not this function's.
+function fenceContentImmediatelyAfter(lines, unit) {
+  const afterIdx = unit.startLine - 1 + unit.lines.length; // 0-indexed
+  if (afterIdx >= lines.length) return null;
+  const opener = fenceDelimiter(lines[afterIdx]);
+  if (!opener) return null;
+  const contentLines = [];
+  let i = afterIdx + 1;
+  while (i < lines.length && !fenceCloses(lines[i], opener)) {
+    contentLines.push(lines[i]);
+    i += 1;
+  }
+  if (i >= lines.length) return null; // unterminated; let EOF reconciliation handle it
+  const text = contentLines.map((l) => l.trim()).join(' ').trim();
+  return text ? { text } : null;
 }
 
 // A checkable claim doesn't need a bold **Right:**/**Wrong:**/**Should:**
@@ -447,6 +549,26 @@ export function extractClaims(markdown, filePath) {
 
     const bare = MARKERS.find((mk) => mk.bareRe.test(text));
     if (bare) {
+      // Checked first, ahead of both branches below: a fence sitting
+      // directly after the marker means neither of them applies -- there
+      // is no "next unit" made of the fence's own content (fences are
+      // invisible to unit-building), and whatever unit comes after the
+      // fence closes is not this marker's content just because it happens
+      // to be next in the units array.
+      const fenceContent = fenceContentImmediatelyAfter(lines, unit);
+      if (fenceContent) {
+        markedBlocks += 1;
+        n += 1;
+        claims.push({
+          id: `c-${String(n).padStart(3, '0')}`,
+          source: { file: filePath, line: unit.startLine },
+          text: fenceContent.text,
+          marker: bare.name,
+        });
+        u += 1;
+        continue;
+      }
+
       const next = units[u + 1];
       if (next && next.isListItem) {
         // The next block is a list: this is the Task 1 case, a bare
@@ -512,7 +634,19 @@ export function extractClaims(markdown, filePath) {
 
   const totalBlocks = countContentLines(lines);
   const ratio = totalBlocks === 0 ? 0 : markedBlocks / totalBlocks;
-  const confidence = ratio < LOW_CONFIDENCE_RATIO ? 'low' : 'high';
+  // An unterminated fence overrides the ratio outright, regardless of what
+  // it computed to: the marker count alone cannot be trusted once part of
+  // the document was silently unread, whether or not that happened to
+  // still clear the ratio threshold on its own. Its guidance also takes
+  // priority over the generic sparse-markup message -- naming the exact
+  // structural defect and its line is more actionable than "mark what
+  // right looks like" when the real problem is a fence, not missing
+  // markers.
+  const unterminatedFenceLine = findUnterminatedFence(lines);
+  const confidence = (unterminatedFenceLine !== null || ratio < LOW_CONFIDENCE_RATIO) ? 'low' : 'high';
+  const guidance = unterminatedFenceLine !== null
+    ? unterminatedFenceGuidance(filePath, unterminatedFenceLine)
+    : (confidence === 'low' ? markupGuidance(filePath, totalBlocks, markedBlocks) : null);
   return {
     claims,
     coverage: {
@@ -520,7 +654,7 @@ export function extractClaims(markdown, filePath) {
       markedBlocks,
       totalBlocks,
       confidence,
-      guidance: confidence === 'low' ? markupGuidance(filePath, totalBlocks, markedBlocks) : null,
+      guidance,
     },
   };
 }
