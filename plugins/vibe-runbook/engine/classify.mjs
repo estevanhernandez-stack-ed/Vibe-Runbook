@@ -17,12 +17,21 @@ export const RULES = [
     test: (t) => /\b(?:over all|all|every)\s+\d+\b/i.test(t),
   },
   {
+    // Deliberately narrower than "any present-tense number": a labelled
+    // identifier names a thing you can look at right now and get the same
+    // answer back. A test count does not, and used to match here (Fix 11,
+    // controller ruling 2026-08-14, resolving a contradiction in the spec
+    // itself — `931 tests green` appears as a pin example in one section
+    // and among the innocently-drifted numbers in another). A pin is
+    // FAIL-eligible; a suite that grows by one test would then report FAIL
+    // forever, which is precisely the noise the receipt rule exists to
+    // suppress. With the clause gone it falls through to `unknown` ->
+    // QUESTION, the designed escalation for genuine ambiguity, beside
+    // 'Your Liverpool export says 58'.
     name: 'pin:labelled-identifier',
     shape: 'pin',
     confidence: 0.9,
-    test: (t) =>
-      /^\s*(?:revision|head|commit|version|tag)\b\s*[:`]?/i.test(t) ||
-      /\b\d+\s+tests?\s+(?:green|passing)\b/i.test(t),
+    test: (t) => /^\s*(?:revision|head|commit|version|tag)\b\s*[:`]?/i.test(t),
   },
   {
     name: 'status:response-code',

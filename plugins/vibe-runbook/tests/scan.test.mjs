@@ -28,19 +28,30 @@ test('carries the extraction coverage through', () => {
   expect(out.coverage.totalBlocks).toBeGreaterThan(out.coverage.markedBlocks);
 });
 
-// The fixture has a known answer: three genuinely stale pins a real walk
-// caught (star-00049-j5r, 0855bd2, 931 tests green), sitting in one
-// comma-separated sentence in the preamble, one of them split across a
-// line-wrap (HEAD / `0855bd2`) and one carrying no bold or backtick at all
-// (931 tests green). If the pipeline can't see all three as pins
-// end-to-end, the plugin fails at its central job — extraction and
-// classification each pass in isolation and the composition is what this
-// test is actually checking. Assert each by name, not just "some claim".
-test('the pipeline recognizes all three of the fixture\'s known-stale pins end-to-end', () => {
+// The fixture has a known answer: two genuinely stale pins a real walk
+// caught (star-00049-j5r, 0855bd2), sitting in one comma-separated
+// sentence in the preamble, one of them split across a line-wrap (HEAD /
+// `0855bd2`). If the pipeline can't see both as pins end-to-end, the
+// plugin fails at its central job — extraction and classification each
+// pass in isolation and the composition is what this test is actually
+// checking. Assert each by name, not just "some claim".
+test('the pipeline recognizes both of the fixture\'s known-stale pins end-to-end', () => {
   const out = scanRunbook(star, 'tests/fixtures/star-smoke.md');
   const pinTexts = out.claims.filter((c) => c.shape === 'pin').map((c) => c.text);
 
   expect(pinTexts.some((t) => t.includes('star-00049-j5r'))).toBe(true);
   expect(pinTexts.some((t) => t.includes('0855bd2'))).toBe(true);
-  expect(pinTexts.some((t) => t.includes('931 tests green'))).toBe(true);
+});
+
+// The third number in that same sentence is NOT a pin (controller ruling,
+// 2026-08-14). It is still extracted — the reader should see it — and it
+// reports as a QUESTION rather than a FAIL that would fire again on every
+// green suite that grew by one test.
+test('the fixture\'s test count is extracted but escalates to unknown, never a pin', () => {
+  const out = scanRunbook(star, 'tests/fixtures/star-smoke.md');
+  const testCount = out.claims.find((c) => c.text.includes('931 tests green'));
+
+  expect(testCount).toBeDefined();
+  expect(testCount.shape).toBe('unknown');
+  expect(testCount.classifierRule).toBe('none');
 });

@@ -3,7 +3,21 @@ import { classifyShape } from '../engine/classify.mjs';
 test('a labelled identifier is a pin', () => {
   expect(classifyShape('Revision `star-00049-j5r`').shape).toBe('pin');
   expect(classifyShape('HEAD `0855bd2`').shape).toBe('pin');
-  expect(classifyShape('931 tests green').shape).toBe('pin');
+});
+
+// Controller ruling, 2026-08-14: the spec lists "931 tests green" as a pin
+// example in one section and among the innocently-drifted numbers in
+// another. Resolved against the pin rule. A pin is FAIL-eligible, and a
+// growing suite would then report FAIL forever -- exactly the noise the
+// receipt rule exists to suppress. It falls through to `unknown` ->
+// QUESTION, the designed escalation for genuine ambiguity, and lands
+// beside 'Your Liverpool export says 58' below: present tense, but about
+// a number that moves on its own.
+test('a test count is not a pin; it escalates rather than failing forever', () => {
+  const r = classifyShape('931 tests green');
+  expect(r.shape).toBe('unknown');
+  expect(r.confidence).toBe(0);
+  expect(classifyShape('412 tests passing').shape).toBe('unknown');
 });
 
 test('a totality quantifier over a count is a receipt', () => {
@@ -40,7 +54,6 @@ test('every classification names the rule that fired', () => {
 test('surrounding markdown emphasis and code delimiters do not block classification', () => {
   expect(classifyShape('**Revision `star-00049-j5r`**').shape).toBe('pin');
   expect(classifyShape('`HEAD 0855bd2`').shape).toBe('pin');
-  expect(classifyShape('**931 tests green**').shape).toBe('pin');
 });
 
 // Regression for a real bug: the old check was "starts with X and ends with
