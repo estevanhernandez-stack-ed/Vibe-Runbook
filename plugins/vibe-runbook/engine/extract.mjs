@@ -43,6 +43,21 @@ function stripBlockquotePrefix(line) {
   return line.replace(/^\s*>\s?/, '');
 }
 
+// A document with almost no marked blocks is one we cannot read, and saying
+// so is the product. Silence here would read as "nothing to check".
+const LOW_CONFIDENCE_RATIO = 0.02;
+
+function markupGuidance(filePath, totalBlocks) {
+  return [
+    `Read ${totalBlocks} blocks in ${filePath} and found no marked claims.`,
+    'Claims are located by marker. Mark what "right" looks like so it can be walked:',
+    '',
+    '    **Right:** the health endpoint answers 200 with the build sha',
+    '',
+    'Supported markers: **Right:**, **Wrong ...:**, **Expected:**, **Should:**',
+  ].join('\n');
+}
+
 export function extractClaims(markdown, filePath) {
   const lines = markdown.split(/\r?\n/);
   const claims = [];
@@ -108,5 +123,16 @@ export function extractClaims(markdown, filePath) {
     }
   }
 
-  return { claims, coverage: { extracted: claims.length, markedBlocks, totalBlocks } };
+  const ratio = totalBlocks === 0 ? 0 : markedBlocks / totalBlocks;
+  const confidence = ratio < LOW_CONFIDENCE_RATIO ? 'low' : 'high';
+  return {
+    claims,
+    coverage: {
+      extracted: claims.length,
+      markedBlocks,
+      totalBlocks,
+      confidence,
+      guidance: confidence === 'low' ? markupGuidance(filePath, totalBlocks) : null,
+    },
+  };
 }
