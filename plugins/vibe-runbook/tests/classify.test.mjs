@@ -70,3 +70,47 @@ test('two unrelated delimited spans at a string\'s edges do not get treated as o
   const boldCase = classifyShape('**Revision** is stale, see **HEAD**');
   expect(boldCase.shape).toBe('unknown');
 });
+
+// A real pin rarely sits at the start of a bare line -- it is almost always
+// an enumerated item ("- revision: ...") or a line inside a blockquote
+// ("> - HEAD: ..."), and the old anchor only recognized the label at column
+// zero. STAR/docs/smoke-2026-08-12.md's own header pins are exactly this
+// shape: a leading "- " bullet inside the preamble blockquote defeated the
+// anchor and every one of them fell through to unknown.
+test('the pin rule tolerates a leading list or quote marker before the label', () => {
+  expect(classifyShape('- revision: `star-00049-j5r`').shape).toBe('pin');
+  expect(classifyShape('* head: `0855bd2`').shape).toBe('pin');
+  expect(classifyShape('+ commit: `abc1234`').shape).toBe('pin');
+  expect(classifyShape('1. version: `2.1.0`').shape).toBe('pin');
+  expect(classifyShape('> - HEAD: `0855bd2`').shape).toBe('pin');
+});
+
+// The label vocabulary itself must not widen -- only the punctuation in
+// front of it. A leading marker on a claim that isn't one of the five known
+// labels is still not a pin.
+test('leading list punctuation does not widen the label vocabulary itself', () => {
+  expect(classifyShape('- Your Liverpool export says 58').shape).toBe('unknown');
+});
+
+// Markdown bold has no space between its delimiter and the word it wraps;
+// a list marker always does. The punctuation tolerance above must require
+// real whitespace after the marker, or "**Revision**" -- two asterisks with
+// no space, from the same family as the two-unrelated-spans regression
+// above -- would misparse as a "*"-bulleted "* Revision" and start
+// matching the pin rule it was never meant to reach.
+test('bold-emphasis asterisks are never mistaken for a list-marker prefix', () => {
+  const boldCase = classifyShape('**Revision** is stale, see **HEAD**');
+  expect(boldCase.shape).toBe('unknown');
+});
+
+// Change 3: a labelled backtick span classifies as a pin so it is visible
+// in the report and available to remediation -- but classification is not
+// execution. Recognizing "label: `x`" as something to run (rather than just
+// something to classify) would mean this exact string, `Version: `2.1.0``,
+// gets run as a shell command the moment a real shell is wired in. Paired
+// with the resolveCommand assertion in verify.test.mjs.
+test('a labelled backtick span classifies as a pin, not unknown', () => {
+  const r = classifyShape('Version: `2.1.0`');
+  expect(r.shape).toBe('pin');
+  expect(r.rule).toBe('pin:labelled-identifier');
+});

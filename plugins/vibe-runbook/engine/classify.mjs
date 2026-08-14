@@ -28,10 +28,23 @@ export const RULES = [
     // suppress. With the clause gone it falls through to `unknown` ->
     // QUESTION, the designed escalation for genuine ambiguity, beside
     // 'Your Liverpool export says 58'.
+    //
+    // The label can sit behind a leading list/quote marker -- "- revision:
+    // ...", "1. version: ...", "> - HEAD: ..." -- because a real pin is
+    // almost always an enumerated line, not bare column-zero prose (marker
+    // widening, 2026-08-14: STAR/docs/smoke-2026-08-12.md's own header pins
+    // are a "- " bulleted list inside a blockquote, and the old anchor
+    // missed all three). Each marker token requires trailing whitespace
+    // (`\s+`, not `\s*`) so this never swallows markdown bold: "**Revision**"
+    // has no space between its two asterisks and the word they wrap, so the
+    // "*"-as-list-marker branch cannot consume it -- see the sibling
+    // two-unrelated-spans regression this shares a root cause with. The
+    // label vocabulary itself is untouched; only what is tolerated in front
+    // of it widened.
     name: 'pin:labelled-identifier',
     shape: 'pin',
     confidence: 0.9,
-    test: (t) => /^\s*(?:revision|head|commit|version|tag)\b\s*[:`]?/i.test(t),
+    test: (t) => /^\s*(?:(?:[-*+>]|\d+[.)])\s+)*(?:revision|head|commit|version|tag)\b\s*[:`]?/i.test(t),
   },
   {
     name: 'status:response-code',

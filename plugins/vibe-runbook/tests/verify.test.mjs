@@ -99,6 +99,21 @@ test('verifyPin never executes an ordinary backticked value as a shell command',
   expect(calls).toBe(0);
 });
 
+// Marker widening, change 3: classify.mjs now reads a labelled backtick span
+// like `Version: `2.1.0`` as shape 'pin' so it shows up in the report. That
+// is a classification change only -- resolveCommand has no idea what
+// classify.mjs decided and must not change behavior just because the shape
+// did. Without a `run:` marker or a config.pins entry there is still no
+// command, so this stays BLOCKED rather than trying to run "2.1.0" as a
+// shell command the moment a real shell is wired in.
+test('a labelled pin that classifies as pin still resolves to no command without run: or config', () => {
+  const claim = { text: 'Version: `2.1.0`' };
+  expect(resolveCommand(claim)).toBeNull();
+  const r = verifyPin(claim, { runCommand: () => { throw new Error('should never be invoked'); } });
+  expect(r.blocked).toMatch(/no command/i);
+  expect(r.ok).toBeUndefined();
+});
+
 test('a status assertion compares the observed code', () => {
   const claim = { text: 'answers 401 unauthenticated', url: '/api/rooms' };
   expect(verifyStatus(claim, { httpProbe: () => 401 }).ok).toBe(true);
