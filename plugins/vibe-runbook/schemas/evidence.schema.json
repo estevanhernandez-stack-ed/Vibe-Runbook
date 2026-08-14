@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "vibe-runbook gathered evidence",
+  "type": "object",
+  "required": ["facts", "gaps", "ran", "skipped"],
+  "properties": {
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "key", "value", "source"],
+        "properties": {
+          "kind": { "type": "string" },
+          "key": { "type": "string" },
+          "value": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      }
+    },
+    "gaps": { "type": "array", "items": { "type": "string" } },
+    "ran": { "type": "array", "items": { "type": "string" } },
+    "skipped": { "type": "array", "items": { "type": "string" } }
+  }
+}
