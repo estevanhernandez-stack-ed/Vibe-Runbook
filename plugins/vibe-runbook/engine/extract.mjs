@@ -67,6 +67,25 @@ function stripListMarker(line) {
   return line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '');
 }
 
+function isTableRowStart(line) {
+  return /^\s*\|/.test(line);
+}
+
+// A fence opens with 3+ backticks or 3+ tildes (CommonMark allows either,
+// and more than three). Returns the exact marker string matched so a
+// caller can require the same character and at least the same length to
+// close it -- a `~~~` block doesn't close on an unrelated ``` a shell
+// heredoc happens to contain, and vice versa.
+function fenceDelimiter(line) {
+  const m = /^\s*(`{3,}|~{3,})/.exec(line);
+  return m ? m[1] : null;
+}
+
+function fenceCloses(line, opener) {
+  const closer = fenceDelimiter(line);
+  return closer !== null && closer[0] === opener[0] && closer.length >= opener.length;
+}
+
 // Walks `text` once, treating a `**bold**` or `` `backtick` `` span as
 // atomic, and splits on top-level occurrences of `char` — one that falls
 // outside both kinds of span. A comma inside "`24 scenes · 67 claims`" or a
@@ -152,7 +171,20 @@ function markupGuidance(filePath, totalBlocks, markedBlocks) {
 // not extraction later folds it into a bigger claim.
 function countContentLines(lines) {
   let count = 0;
+  let fence = null;
   for (const line of lines) {
+    if (fence) {
+      // Fenced content is never a heading (a shell "# comment" line reads
+      // like one to isHeadingLine's line-shape check, and is not) -- but it
+      // was still read, so it still counts. Skip only a true blank line,
+      // same as outside a fence.
+      if (fenceCloses(line, fence)) fence = null;
+      if (line.trim() === '') continue;
+      count += 1;
+      continue;
+    }
+    const opener = fenceDelimiter(line);
+    if (opener) fence = opener;
     if (line.trim() === '') continue;
     if (isHeadingLine(line)) continue;
     if (isBlockquoteLine(line) && stripBlockquotePrefix(line).trim() === '') continue;
@@ -172,12 +204,29 @@ function countContentLines(lines) {
 function groupIntoUnits(lines, startIdx, endIdxExclusive) {
   const units = [];
   let cur = null;
+  let fence = null;
   const flush = () => {
     if (cur && cur.lines.length) units.push(cur);
     cur = null;
   };
   for (let i = startIdx; i < endIdxExclusive; i += 1) {
     const raw = lines[i];
+
+    if (fence) {
+      // Fenced content -- its own delimiters included -- is code, not
+      // prose: it never joins a unit's text and never flushes the one it
+      // sits inside, so ordinary prose immediately before and after a
+      // fence still reads as one logical block, the fence itself simply
+      // invisible to it.
+      if (fenceCloses(raw, fence)) fence = null;
+      continue;
+    }
+    const opener = fenceDelimiter(raw);
+    if (opener) {
+      fence = opener;
+      continue;
+    }
+
     if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw)) {
       flush();
       continue;
@@ -185,6 +234,11 @@ function groupIntoUnits(lines, startIdx, endIdxExclusive) {
     if (isListItemStart(raw)) {
       flush();
       cur = { lines: [stripListMarker(raw)], startLine: i + 1, isListItem: true };
+      continue;
+    }
+    if (isTableRowStart(raw)) {
+      flush();
+      cur = { lines: [raw.trim()], startLine: i + 1, isListItem: false, isTableRow: true };
       continue;
     }
     if (cur === null) {
@@ -435,9 +489,12 @@ export function extractClaims(markdown, filePath) {
 
     // Neither a line-anchored bold marker nor its bare form: the last
     // chance for this unit to be a claim is a mid-line prose expectation,
-    // and only inside a list item -- see hasProseExpectation above for why
-    // flowing paragraph text doesn't qualify.
-    if (unit.isListItem && hasProseExpectation(text)) {
+    // and only inside a list item or a table row -- see hasProseExpectation
+    // above for why flowing paragraph text doesn't qualify. A table cell
+    // ("| Database | Status should be "ok" |") is the same enumerated-line
+    // shape as a list item's "Database: Status should be "ok"" -- same
+    // explicit word, just a pipe cell instead of a bullet.
+    if ((unit.isListItem || unit.isTableRow) && hasProseExpectation(text)) {
       markedBlocks += 1;
       n += 1;
       claims.push({

@@ -95,6 +95,123 @@ test('a prose marker inside ordinary flowing paragraph text is not a claim', () 
   expect(claims.length).toBe(0);
 });
 
+// Fence awareness, round 2. isHeadingLine's naive line-shape check
+// (`/^\s*#{1,6}\s/`) can't tell a fenced shell comment from a markdown
+// heading -- "# Should return 11 achievements" inside a ```bash block reads
+// as a heading, which flushes the unit it's inside and drops the comment
+// from any claim text before this widening's own check ever runs. This is
+// not a Reel-Battles quirk: `# something` is the single most common line
+// inside a shell block, and ops runbooks lean on shell blocks constantly.
+test('a "#" shell comment inside a fenced code block is never mistaken for a heading', () => {
+  const md = [
+    '# Runbook',
+    '',
+    '## Startup',
+    '',
+    '1. Verify achievement definitions are loaded, and should be flat:',
+    '   ```bash',
+    '   # should be a comment, not a claim',
+    '   curl http://localhost:5000/api/achievements',
+    '   ```',
+    '2. Confirm the response body should be non-empty.',
+  ].join('\n');
+
+  const { claims } = extractClaims(md, 'test.md');
+  // Item 1's own first line carries a real marker outside the fence and
+  // must still be found -- the fence must not swallow it via a stray flush.
+  expect(claims.some((c) => c.text.includes('should be flat'))).toBe(true);
+  // Item 2, entirely outside any fence, is unaffected.
+  expect(claims.some((c) => c.text.includes('should be non-empty'))).toBe(true);
+  // Total: exactly those two -- the fenced comment must not itself become a
+  // third claim.
+  expect(claims.length).toBe(2);
+});
+
+// The other half of fence awareness: content *inside* a fence is code, not
+// prose, and is never scanned for a claim even when it contains a required
+// phrase verbatim. `echo "should be ok"` in an example block is not a claim
+// about the system -- it's illustrating a command.
+test('an expectation phrase inside fenced code is never extracted as a claim', () => {
+  const md = [
+    '# Runbook',
+    '',
+    '## Example',
+    '',
+    '- Sample output:',
+    '  ```',
+    '  echo "the response should be ok"',
+    '  ```',
+  ].join('\n');
+
+  const { claims } = extractClaims(md, 'test.md');
+  expect(claims.length).toBe(0);
+});
+
+// Tilde fences are valid CommonMark too, and must be tracked the same way.
+test('a ~~~ tilde fence is tracked the same way as a backtick fence', () => {
+  const md = [
+    '# Runbook',
+    '',
+    '## Example',
+    '',
+    '- Sample output:',
+    '  ~~~',
+    '  echo "the response should be ok"',
+    '  ~~~',
+  ].join('\n');
+
+  const { claims } = extractClaims(md, 'test.md');
+  expect(claims.length).toBe(0);
+});
+
+// Prose before and after a fence, inside the same list item, still joins as
+// one logical block -- the fence is transparent, not a unit boundary the
+// way a blank line or a new list item is.
+test('prose before and after a fence in the same list item still joins as one unit', () => {
+  const md = [
+    '# Runbook',
+    '',
+    '## Example',
+    '',
+    '1. Run the health check:',
+    '   ```bash',
+    '   curl -s localhost/health',
+    '   ```',
+    '   The response should be a 200.',
+  ].join('\n');
+
+  const { claims } = extractClaims(md, 'test.md');
+  const claim = claims.find((c) => c.text.includes('should be a 200'));
+  expect(claim).toBeDefined();
+  expect(claim.text).toContain('Run the health check');
+  expect(claim.text).not.toMatch(/curl/);
+});
+
+// Table rows, per the coordinator's fix 2: "| Database | Status should be
+// "ok" |" is the same claim shape as a list item's "Database: Status should
+// be "ok"" -- same explicit word, same enumerated-line structure, just a
+// pipe cell instead of a bullet. The line does not move: a row without an
+// expectation word is not a claim, same as a list item without one.
+test('a table row carrying an explicit expectation word is a claim', () => {
+  const md = [
+    '# Runbook',
+    '',
+    '## Health check',
+    '',
+    '| Component | Expectation |',
+    '|---|---|',
+    '| Database | Status should be "ok" |',
+    '| Scheduler | Last activity < 30 minutes ago |',
+  ].join('\n');
+
+  const { claims } = extractClaims(md, 'test.md');
+  const texts = claims.map((c) => c.text);
+  expect(texts.some((t) => t.includes('Status should be "ok"'))).toBe(true);
+  // The sibling row carries no expectation word and must not be invented.
+  expect(texts.some((t) => t.includes('Scheduler'))).toBe(false);
+  expect(claims.length).toBe(1);
+});
+
 test('claims found via a prose marker count toward coverage.extracted like any other claim', () => {
   const md = [
     '# Runbook',
