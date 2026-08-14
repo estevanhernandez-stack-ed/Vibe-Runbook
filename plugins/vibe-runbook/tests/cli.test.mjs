@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -319,4 +319,75 @@ test('the credential never reaches the persisted claim or the rendered report', 
   expect(walked[0].verdict).toBe('FAIL');
   expect(JSON.stringify(walked)).not.toContain(token);
   expect(renderReport({ runbook: 'r.md', env: 'live', claims: walked, coverage: {} })).not.toContain(token);
+});
+
+// ---------------------------------------------------------------------------
+// Fix 5 (2026-08-14 final review): config and state were rooted at
+// process.cwd(), but the family convention runs the engine FROM the plugin
+// directory -- so a walk launched the documented way wrote .vibe-runbook/ into
+// the installed plugin, not the user's project, and read config from there
+// too. vibe-access takes `--app`; this takes `--project`, and every config and
+// state path joins off it.
+// ---------------------------------------------------------------------------
+
+const pluginDir = fileURLToPath(new URL('..', import.meta.url));
+
+test('scan writes state into --project, not into the directory the engine runs from', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-proj-'));
+  copyFileSync(fixture, join(project, 'runbook.md'));
+
+  execFileSync('node', [cli, 'scan', '--runbook', join(project, 'runbook.md'), '--project', project], {
+    cwd: pluginDir,
+  });
+
+  const out = JSON.parse(readFileSync(join(project, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
+  expect(out.claims.length).toBeGreaterThan(0);
+  expect(existsSync(join(pluginDir, '.vibe-runbook'))).toBe(false);
+});
+
+test('a --runbook path resolves against --project, so a relative path means the project', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-proj-rel-'));
+  copyFileSync(fixture, join(project, 'runbook.md'));
+
+  execFileSync('node', [cli, 'scan', '--runbook', 'runbook.md', '--project', project], { cwd: pluginDir });
+
+  const out = JSON.parse(readFileSync(join(project, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
+  expect(out.runbook).toContain('runbook.md');
+  expect(out.claims.length).toBeGreaterThan(0);
+});
+
+test('walk reads state and config from --project, and writes the walked claims back there', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-proj-walk-'));
+  mkdirSync(join(project, '.vibe-runbook', 'state'), { recursive: true });
+  writeFileSync(join(project, 'version.mjs'), "console.log('9.9.9');\n");
+  writeFileSync(
+    join(project, '.vibe-runbook', 'state', 'claims.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0',
+      runbook: 'runbook.md',
+      coverage: { extracted: 1, markedBlocks: 1, totalBlocks: 1, confidence: 'high', guidance: null },
+      claims: [{
+        id: 'c-1', shape: 'pin', venue: 'executable', text: 'Version `9.9.9`',
+        cost: { raw: 'no spend', count: 0 }, verdict: null, evidence: null, checkedAt: null,
+        source: { file: 'runbook.md', line: 1 },
+      }],
+    }, null, 2),
+  );
+  // The command is relative to the project, which is the only reason resolving
+  // config off --project matters rather than being cosmetic.
+  writeFileSync(
+    join(project, '.vibe-runbook', 'config.json'),
+    JSON.stringify({ pins: { version: 'node version.mjs' } }, null, 2),
+  );
+
+  const report = execFileSync('node', [cli, 'walk', '--env', 'stub', '--project', project], {
+    cwd: pluginDir,
+    encoding: 'utf8',
+    env: { ...process.env, VIBE_RUNBOOK_STUB_TOKEN: 'stub-token' },
+  });
+
+  const written = JSON.parse(readFileSync(join(project, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
+  expect(written.claims[0].verdict).toBe('PASS');
+  expect(report).toContain('9.9.9');
+  expect(existsSync(join(pluginDir, '.vibe-runbook'))).toBe(false);
 });

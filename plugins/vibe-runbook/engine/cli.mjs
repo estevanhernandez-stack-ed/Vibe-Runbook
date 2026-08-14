@@ -9,7 +9,12 @@ import { verifyPin, verifyStatus } from './verify.mjs';
 import { assignVerdict } from './verdict.mjs';
 import { renderReport } from './report.mjs';
 
-const shell = (cmd) => execSync(cmd, { encoding: 'utf8' });
+// Bound to the project root, not to wherever the engine happens to be running
+// from (Fix 5, 2026-08-14 final review). A pin's verification command is
+// written from the project's point of view -- `git rev-parse --short HEAD`
+// means the project's HEAD -- and running it in the installed plugin directory
+// answers a different question with a straight face.
+const shellIn = (cwd) => (cmd) => execSync(cmd, { encoding: 'utf8', cwd });
 
 const tokenVar = (env) => `VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN`;
 const tokenFor = (env) => process.env[tokenVar(env)];
@@ -63,13 +68,24 @@ function arg(name) {
   return i === -1 ? undefined : process.argv[i + 1];
 }
 
+// The one root every path in this file hangs off (Fix 5, 2026-08-14 final
+// review). Config and state used to be joined off process.cwd(), while the
+// family convention runs the engine FROM the plugin directory -- so a walk
+// invoked the documented way wrote .vibe-runbook/ into the installed plugin
+// and read config from there too. vibe-access solves this with
+// `resolve(flags.app ?? process.cwd())`; same move, named for what this plugin
+// operates on.
+const projectRoot = () => resolvePath(arg('project') ?? process.cwd());
+
+const statePath = (root) => join(root, '.vibe-runbook', 'state', 'claims.json');
+
 // Local house style, not the environment's. Absent config is normal -- most
 // runbooks are walked without one, and this is the only place that has to
 // know the difference between "no file" and "malformed file" (Fix 2,
 // 2026-08-14 review: nothing previously read this file at all, so
 // verifyPin's config.pins fallback was unreachable dead code).
-function loadConfig() {
-  const configPath = join(process.cwd(), '.vibe-runbook', 'config.json');
+function loadConfig(root) {
+  const configPath = join(root, '.vibe-runbook', 'config.json');
   if (!existsSync(configPath)) return {};
   return JSON.parse(readFileSync(configPath, 'utf8'));
 }
@@ -157,12 +173,16 @@ const isMain =
 
 if (isMain) {
   const command = process.argv[2];
+  const root = projectRoot();
 
   if (command === 'scan') {
     const runbook = arg('runbook');
     if (!runbook) { console.error('scan needs --runbook <path>'); process.exit(1); }
-    const out = scanRunbook(readFileSync(runbook, 'utf8'), runbook);
-    const dest = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
+    // Relative means relative to the project, not to wherever the engine was
+    // launched. Absolute paths pass through untouched.
+    const runbookPath = resolvePath(root, runbook);
+    const out = scanRunbook(readFileSync(runbookPath, 'utf8'), runbookPath);
+    const dest = statePath(root);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
     console.log(`scanned ${out.claims.length} claims, confidence ${out.coverage.confidence}`);
@@ -170,12 +190,12 @@ if (isMain) {
     const env = arg('env');
     if (!env) { console.error('walk needs --env <name>; there is no default environment'); process.exit(1); }
 
-    const statePath = join(process.cwd(), '.vibe-runbook', 'state', 'claims.json');
+    const dest = statePath(root);
     let state;
     try {
-      state = JSON.parse(readFileSync(statePath, 'utf8'));
+      state = JSON.parse(readFileSync(dest, 'utf8'));
     } catch {
-      console.error('no cached scan; run `vibe-runbook scan --runbook <path>` first');
+      console.error('no cached scan; run `vibe-runbook scan --runbook <path> --project <path>` first');
       process.exit(1);
     }
 
@@ -186,16 +206,18 @@ if (isMain) {
       process.exit(1);
     }
 
-    const config = loadConfig();
+    const config = loadConfig(root);
     const walked = await runWalk(state, config, {
-      runCommand: shell,
+      runCommand: shellIn(root),
       probeUrl: makeProbe(tokenFor(env)),
     });
 
-    writeFileSync(statePath, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
+    writeFileSync(dest, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
     console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
   } else {
-    console.error('usage: vibe-runbook <scan|walk> [--runbook <path>] [--env <name>]');
+    console.error(
+      'usage: vibe-runbook <scan|walk> [--runbook <path>] [--env <name>] [--project <path>]'
+    );
     process.exit(1);
   }
 }
