@@ -28,3 +28,19 @@ test('facts and gaps from every gatherer are merged', () => {
   expect(out.facts).toHaveLength(2);
   expect(out.gaps).toEqual(['no Dockerfile']);
 });
+
+test('a hand-rolled evidence object with an unknown kind is skipped at the seam, never merged', () => {
+  // Bypasses makeEvidence entirely — its refusal only fires when a gatherer
+  // routes its return through it. runGatherers must re-check at the seam
+  // itself, or a typo'd kind merges silently as if it were legitimate.
+  const bad = {
+    name: 'bad',
+    run: () => ({ gatherer: 'bad', ok: true, facts: [{ kind: 'run-commnd', key: 'x', value: 'y', source: 'z' }], gaps: [] }),
+  };
+  const fine = { name: 'fine', run: () => makeEvidence('fine', { facts: [], gaps: [] }) };
+  const out = runGatherers([bad, fine], {});
+  expect(out.ran).toEqual(['fine']);
+  expect(out.skipped).toEqual(['bad']);
+  expect(out.facts).toHaveLength(0);
+  expect(out.gaps.some((g) => /bad/.test(g) && /run-commnd/.test(g))).toBe(true);
+});

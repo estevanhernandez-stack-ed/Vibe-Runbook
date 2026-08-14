@@ -32,15 +32,27 @@ export function runGatherers(gatherers, ctx) {
   const ran = [];
   const skipped = [];
   for (const g of gatherers) {
+    let ev;
     try {
-      const ev = g.run(ctx);
-      facts.push(...ev.facts);
-      gaps.push(...ev.gaps);
-      ran.push(g.name);
+      ev = g.run(ctx);
     } catch (e) {
       skipped.push(g.name);
       gaps.push(`gatherer "${g.name}" could not run: ${e.message}`);
+      continue;
     }
+    // makeEvidence's refusal only fires when a gatherer routes its return
+    // through it. A hand-rolled evidence object can still reach here with a
+    // typo'd kind — re-check at the seam and treat it exactly like a throw:
+    // skipped, never silently merged as if it were legitimate evidence.
+    const badFact = ev.facts.find((f) => !FACT_KINDS.includes(f.kind));
+    if (badFact) {
+      skipped.push(g.name);
+      gaps.push(`gatherer "${g.name}" emitted an unknown fact kind "${badFact.kind}", so its evidence was discarded`);
+      continue;
+    }
+    facts.push(...ev.facts);
+    gaps.push(...ev.gaps);
+    ran.push(g.name);
   }
   return { facts, gaps, ran, skipped };
 }
