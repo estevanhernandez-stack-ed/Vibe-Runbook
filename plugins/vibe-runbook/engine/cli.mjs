@@ -258,7 +258,14 @@ if (isMain) {
         const current = readFileSync(file, 'utf8');
         if (!current.includes(p.before)) { unmatched.push(p); continue; }
         if (!backups.has(file)) backups.set(file, backupFile(file));
-        writeFileSync(file, current.replace(p.before, p.after), 'utf8');
+        // The replacer-function form, not a plain string: `p.after` is built
+        // from user-supplied config (config.pins.<label>), and
+        // String.prototype.replace treats `$&`, `` $` ``, `$'`, `$$` inside a
+        // *string* replacement as substitution patterns -- an ordinary
+        // ANSI-C-quoted bash command (`echo $'9.9.9'`) would splice the rest
+        // of the document into the write. A function return is never
+        // pattern-interpreted.
+        writeFileSync(file, current.replace(p.before, () => p.after), 'utf8');
       }
       console.log(renderPlan(
         { proposals: plan.proposals.filter((p) => !unmatched.includes(p)), needsContext: plan.needsContext },

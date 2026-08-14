@@ -488,6 +488,87 @@ test('remediate reports a pin it cannot rewrite instead of inventing a command',
 // is a correct claim with no verbatim single-line span in the file. Rewriting
 // it means rewriting the wrap, which is not a thing to guess at inside
 // somebody's runbook. It must be skipped, named, and leave the file untouched.
+// Found live by a reviewer on a real runbook: `current.replace(p.before,
+// p.after)` passes `p.after` as a *replacement pattern*, not a literal string
+// -- `String.prototype.replace` special-cases `$'`, `` $` ``, `$&`, and `$$`
+// inside it. `p.after` is built from user-supplied config
+// (config.pins.<label>), and any ordinary bash ANSI-C-quoted command --
+// `echo $'9.9.9'`, `awk -F$'\t'` -- carries `$'` right through. The reviewer's
+// repro: config.pins.version = "echo $'9.9.9'" printed a correct diff and then
+// spliced the rest of the document into the middle of the file on write (136
+// bytes in, 231 bytes out). `$$` collapses silently to a single `$` instead of
+// splicing -- the sneakier of the two, since nothing looks obviously wrong.
+// `$&` re-injects the matched claim text. The fix wraps `p.after` in a
+// replacer function (`() => p.after`), which turns off pattern interpretation
+// entirely. Asserted on the file on disk after the real --apply subprocess
+// runs, not on the proposal object -- the proposal was always correct, and
+// asserting on it is exactly what let this through.
+function remediateDirWithCommand(command) {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-dollar-'));
+  const runbook = join(project, 'runbook.md');
+  const original =
+    '# Ops\n\n> **Revision `star-00049-j5r`** is what is deployed.\n\n' +
+    '## Notes\n\nEverything below this line must land in the same place, byte for byte, after --apply runs.\n';
+  writeFileSync(runbook, original);
+  mkdirSync(join(project, '.vibe-runbook', 'state'), { recursive: true });
+  writeFileSync(
+    join(project, '.vibe-runbook', 'state', 'claims.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0',
+      runbook,
+      coverage: { extracted: 1, markedBlocks: 1, totalBlocks: 3, confidence: 'high', guidance: null },
+      claims: [{
+        id: 'c-001', shape: 'pin', venue: 'executable', text: '**Revision `star-00049-j5r`**',
+        cost: { raw: null, count: null }, verdict: 'FAIL',
+        evidence: 'runbook says star-00049-j5r, system says star-00099-NEW',
+        checkedAt: null, source: { file: runbook, line: 3 },
+      }],
+    }, null, 2),
+  );
+  writeFileSync(
+    join(project, '.vibe-runbook', 'config.json'),
+    JSON.stringify({ pins: { revision: command } }, null, 2),
+  );
+  return { project, runbook, original };
+}
+
+// The expected file is computed with the replacer-function form -- the same
+// mechanism the fix uses -- rather than hand-written, since the corruption
+// depends on the exact trailing bytes of `original`. That form is what's
+// under test in cli.mjs; used here only to state "no pattern interpretation"
+// as the expectation, not to duplicate the fix's logic under test.
+const literalReplace = (haystack, before, after) => haystack.replace(before, () => after);
+
+test('remediate --apply writes a config command containing $\' byte-exact, not spliced by String.replace substitution syntax', () => {
+  const command = "echo $'9.9.9'";
+  const { project, runbook, original } = remediateDirWithCommand(command);
+
+  runRemediate(project, ['--apply']);
+
+  const expected = literalReplace(original, '**Revision `star-00049-j5r`**', `Revision — run: \`${command}\``);
+  expect(readFileSync(runbook, 'utf8')).toBe(expected);
+});
+
+test('remediate --apply writes a config command containing $$ byte-exact, not silently collapsed to a single $', () => {
+  const command = 'echo "pid: $$"';
+  const { project, runbook, original } = remediateDirWithCommand(command);
+
+  runRemediate(project, ['--apply']);
+
+  const expected = literalReplace(original, '**Revision `star-00049-j5r`**', `Revision — run: \`${command}\``);
+  expect(readFileSync(runbook, 'utf8')).toBe(expected);
+});
+
+test('remediate --apply writes a config command containing $& byte-exact, not replaced with the matched claim text', () => {
+  const command = 'echo "match was: $&"';
+  const { project, runbook, original } = remediateDirWithCommand(command);
+
+  runRemediate(project, ['--apply']);
+
+  const expected = literalReplace(original, '**Revision `star-00049-j5r`**', `Revision — run: \`${command}\``);
+  expect(readFileSync(runbook, 'utf8')).toBe(expected);
+});
+
 test('a claim joined across a line wrap is skipped and named, never guessed into the file', () => {
   const project = mkdtempSync(join(tmpdir(), 'vrb-wrap-'));
   const runbook = join(project, 'runbook.md');
