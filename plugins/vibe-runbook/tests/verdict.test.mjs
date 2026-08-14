@@ -62,6 +62,41 @@ test('a receipt with a nonzero cost and a failing check is still QUESTION, not S
   expect(c.verdict).not.toBe('FAIL');
 });
 
+// Fix 9 (2026-08-14 final review): wouldCost aggregated every claim carrying
+// a nonzero cost, regardless of what verdict it actually landed. A receipt or
+// an unknown sitting under a `spends one check` heading became QUESTION via
+// the shape gate -- it was never a candidate to spend on -- and still showed
+// up in "what a full walk would cost". The report then quoted a price for
+// something it would never buy, in a tool whose only product is being honest
+// about numbers.
+test('a claim that never became SPENDS contributes nothing to what a full walk would cost', () => {
+  const s = summarize([
+    { shape: 'receipt', verdict: 'QUESTION', cost: { raw: 'spends one check', count: 1 } },
+    { shape: 'unknown', verdict: 'QUESTION', cost: { raw: 'spends one sweep', count: 1 } },
+    { shape: 'human', verdict: 'HUMAN', cost: { raw: 'spends one check', count: 1 } },
+  ]);
+  expect(s.wouldCost).toEqual({});
+});
+
+test('the price counts SPENDS only, even when a cheaper shape shares its heading', () => {
+  const s = summarize([
+    { shape: 'pin', verdict: 'SPENDS', cost: { raw: 'spends one check', count: 1 } },
+    { shape: 'receipt', verdict: 'QUESTION', cost: { raw: 'spends one check', count: 1 } },
+  ]);
+  expect(s.wouldCost).toEqual({ 'spends one check': 1 });
+});
+
+// Fix 10 (2026-08-14 final review): the BLOCKED paths set verdict and evidence
+// and left checkedAt alone, so a claim that PASSed at 17:55 and blocked on the
+// next walk still reported it was checked at 17:55. A stale timestamp on a
+// staleness detector is the one lie it cannot afford.
+test('a BLOCKED verdict clears the timestamp a previous PASS left behind', () => {
+  const passed = { ...base, verdict: 'PASS', evidence: 'x', checkedAt: '2026-08-14T17:55:00.000Z' };
+
+  expect(assignVerdict(passed, { blocked: 'credential missing' }).checkedAt).toBeNull();
+  expect(assignVerdict(passed, null).checkedAt).toBeNull();
+});
+
 test('summarize handles a claim with a null cost.raw without a "null" key or throwing', () => {
   expect(() =>
     summarize([{ shape: 'unknown', verdict: 'QUESTION', cost: { raw: null, count: null } }])

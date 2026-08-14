@@ -10,8 +10,12 @@ export function assignVerdict(claim, checkResult) {
   if ((claim.cost?.count ?? 0) > 0) {
     return { ...claim, verdict: 'SPENDS', evidence: null, checkedAt: null };
   }
-  if (!checkResult) return { ...claim, verdict: 'BLOCKED', evidence: 'not checked' };
-  if (checkResult.blocked) return { ...claim, verdict: 'BLOCKED', evidence: checkResult.blocked };
+  // checkedAt is cleared on both BLOCKED paths, not just left alone (Fix 10,
+  // 2026-08-14 final review). A claim that PASSed at 17:55 and blocked on the
+  // next walk otherwise keeps reporting 17:55 -- a stale timestamp on the one
+  // tool whose entire product is being honest about staleness.
+  if (!checkResult) return { ...claim, verdict: 'BLOCKED', evidence: 'not checked', checkedAt: null };
+  if (checkResult.blocked) return { ...claim, verdict: 'BLOCKED', evidence: checkResult.blocked, checkedAt: null };
 
   return {
     ...claim,
@@ -26,8 +30,14 @@ export function summarize(claims) {
   const wouldCost = {};
   for (const c of claims) {
     if (c.verdict in counts) counts[c.verdict] += 1;
+    // Only what actually landed SPENDS (Fix 9, 2026-08-14 final review). Cost
+    // is read off the nearest heading, so a receipt or an unknown under a
+    // `spends one check` section carries the annotation while never being a
+    // candidate to spend on -- the shape gate above already took it to
+    // QUESTION. Counting it quotes the reader a price for something this walk
+    // would never buy.
     const raw = c.cost?.raw;
-    if (raw && (c.cost?.count ?? 0) > 0) wouldCost[raw] = (wouldCost[raw] ?? 0) + 1;
+    if (c.verdict === 'SPENDS' && raw) wouldCost[raw] = (wouldCost[raw] ?? 0) + 1;
   }
   return { counts, coverage: { checked: counts.PASS + counts.FAIL, total: claims.length }, wouldCost };
 }
