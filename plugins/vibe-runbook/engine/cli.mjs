@@ -114,8 +114,19 @@ export async function runWalk(state, config, { runCommand, probeUrl }) {
     if ((c.cost?.count ?? 0) > 0) return assignVerdict(c, null);
     if (c.shape === 'pin') return assignVerdict(c, verifyPin(c, { runCommand, config }));
     if (c.shape === 'status-assertion') {
-      const withUrl = { ...c, url: resolveUrl(c, config) };
-      return assignVerdict(withUrl, verifyStatus(withUrl, { httpProbe: probe }));
+      // The resolved url is derived from config for THIS walk only -- it
+      // is never written back onto the persisted claim (2026-08-14
+      // re-review #4). Doing so used to mean a corrected config.urls entry
+      // was silently ignored on the next walk, because claim.url would
+      // already be truthy from the previous run and resolveUrl prefers it.
+      // claims.json should carry what scan found plus the last walk's
+      // verdicts, not a cached copy of configuration that can change
+      // underneath it. verifyStatus still needs the url to probe and to
+      // name in its evidence, so it goes into the object built just for
+      // that call; assignVerdict gets the original, unmodified claim.
+      const url = resolveUrl(c, config);
+      const checkResult = verifyStatus({ ...c, url }, { httpProbe: probe });
+      return assignVerdict(c, checkResult);
     }
     return assignVerdict(c, null);
   });

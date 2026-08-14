@@ -154,10 +154,46 @@ test("a status assertion's url resolves from config.urls and reaches the probe c
     probeUrl: async (url) => { probedWith = url; return 401; },
   });
   expect(probedWith).toBe('https://stub.invalid/health');
-  expect(walked[0].url).toBe('https://stub.invalid/health');
+  // The resolved url is derived config, not claim state (2026-08-14
+  // re-review #4) -- it must never be written back onto the persisted
+  // claim, or a later correction to config.urls is silently ignored on
+  // the next walk. It still reached verifyStatus (proven by probedWith
+  // above and by evidence below), it just doesn't get cached here.
+  expect(walked[0].url).toBeUndefined();
+  expect(walked[0].evidence).toContain('https://stub.invalid/health');
   // Whatever the outcome, it must not be the specific "nothing to check"
   // failure Fix 3 exists to close.
   expect(walked[0].evidence ?? '').not.toMatch(/no url for this status assertion/i);
+});
+
+// The regression this shipped without (2026-08-14 re-review #4): resolveUrl
+// checked claim.url before config.urls, and runWalk wrote the resolved url
+// back onto the returned claim -- so once a url resolved, it was truthy on
+// every later walk that didn't re-scan, and a subsequent correction to
+// config.urls was silently ignored. Reproduced exactly as the reviewer did:
+// run runWalk, change config.urls, feed the first run's own output back in
+// as the second run's input -- exactly what the real CLI does through
+// claims.json between two `walk` invocations.
+test('a corrected config.urls entry is used on the next walk, not the url a previous walk resolved', async () => {
+  const claim = statusClaim('c-13', undefined); // no claim.url -- must come from config
+  const probedUrls = [];
+  const probeUrl = async (url) => { probedUrls.push(url); return 401; };
+
+  const firstWalk = await runWalk(
+    { claims: [claim] },
+    { urls: { 'c-13': 'https://stub.invalid/old' } },
+    { runCommand: () => {}, probeUrl },
+  );
+  const secondWalk = await runWalk(
+    { claims: firstWalk }, // the first walk's own output, as the real CLI feeds claims.json back in
+    { urls: { 'c-13': 'https://stub.invalid/new' } }, // corrected between walks
+    { runCommand: () => {}, probeUrl },
+  );
+
+  expect(probedUrls).toEqual(['https://stub.invalid/old', 'https://stub.invalid/new']);
+  expect(secondWalk[0].evidence).toContain('https://stub.invalid/new');
+  expect(firstWalk[0].url).toBeUndefined();
+  expect(secondWalk[0].url).toBeUndefined();
 });
 
 // Fix 1 (2026-08-14 re-review #3): the previous version of this test hit a
