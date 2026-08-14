@@ -47,9 +47,19 @@ function stripBlockquotePrefix(line) {
 // so is the product. Silence here would read as "nothing to check".
 const LOW_CONFIDENCE_RATIO = 0.02;
 
-function markupGuidance(filePath, totalBlocks) {
+function markupGuidance(filePath, totalBlocks, markedBlocks) {
+  // The ratio can be "low" with markedBlocks > 0 -- a 1200-line doc with 20
+  // real markers is still below LOW_CONFIDENCE_RATIO. Saying "found no
+  // marked claims" in that case would be false, and honesty about what was
+  // read is the entire point of this branch. Report what was actually
+  // found, not an assumption that it was zero.
+  const finding = markedBlocks === 0
+    ? `Read ${totalBlocks} blocks in ${filePath} and found no marked claims.`
+    : `Read ${totalBlocks} blocks in ${filePath} and found only ${markedBlocks} ` +
+      `marked claim${markedBlocks === 1 ? '' : 's'}, which is sparse enough that ` +
+      'this document is probably mostly unmarked prose.';
   return [
-    `Read ${totalBlocks} blocks in ${filePath} and found no marked claims.`,
+    finding,
     'Claims are located by marker. Mark what "right" looks like so it can be walked:',
     '',
     '    **Right:** the health endpoint answers 200 with the build sha',
@@ -132,7 +142,7 @@ export function extractClaims(markdown, filePath) {
       markedBlocks,
       totalBlocks,
       confidence,
-      guidance: confidence === 'low' ? markupGuidance(filePath, totalBlocks) : null,
+      guidance: confidence === 'low' ? markupGuidance(filePath, totalBlocks, markedBlocks) : null,
     },
   };
 }

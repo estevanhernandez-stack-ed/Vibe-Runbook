@@ -25,3 +25,25 @@ test('a marked runbook yields high confidence', () => {
   expect(coverage.confidence).toBe('high');
   expect(coverage.guidance).toBeNull();
 });
+
+// Regression for a real bug: markupGuidance() used to say "found no marked
+// claims" any time confidence was 'low', even when markedBlocks > 0. A large
+// document can carry real markers and still fall below LOW_CONFIDENCE_RATIO
+// on ratio alone -- 20 markers in a 1200-line ops doc is exactly that shape
+// (20/1200 = 0.0167, under the 0.02 threshold). The guidance sentence has to
+// stay true in that band, not just at true-zero.
+test('a sparsely-marked runbook (nonzero markers, low ratio) gets honest guidance, not a false zero', () => {
+  const markerLines = Array.from({ length: 20 }, (_, i) => `**Right:** step ${i} did the thing`);
+  const plainLines = Array.from({ length: 1180 }, (_, i) => `Plain prose line ${i} about the system.`);
+  const synthetic = `# Title\n\n${markerLines.concat(plainLines).join('\n\n')}\n`;
+
+  const { coverage } = extractClaims(synthetic, 'tests/synthetic-sparse.md');
+
+  expect(coverage.markedBlocks).toBe(20);
+  expect(coverage.totalBlocks).toBe(1200);
+  expect(coverage.confidence).toBe('low');
+  expect(coverage.guidance).not.toEqual(expect.stringContaining('found no marked claims'));
+  expect(coverage.guidance).toEqual(expect.stringContaining('20'));
+  expect(coverage.guidance).toEqual(expect.stringContaining('tests/synthetic-sparse.md'));
+  expect(coverage.guidance).toEqual(expect.stringContaining('**Right:**'));
+});
