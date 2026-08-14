@@ -37,6 +37,19 @@ test('a command comes from config when the pin is a bare value', () => {
   expect(verifyPin(claim, { runCommand: () => '216b917', config }).ok).toBe(true);
 });
 
+// Fix 2 (2026-08-14 re-review): the label used to be derived from raw
+// claim.text, so a markdown-wrapped pin -- the real shape extract.mjs
+// produces from a preamble, and the real shape in tests/fixtures/star-smoke.md
+// -- keyed under the literal "**revision", not "revision". Nobody configuring
+// this by hand would guess that. The fixture string below is copied verbatim
+// from star-smoke.md's own preamble, not synthesized.
+test('a config key uses the natural label, not the raw markdown-wrapped text (the real STAR shape)', () => {
+  const claim = { text: '**Revision `star-00049-j5r`**' };
+  const config = { pins: { revision: 'gcloud run services describe star --format=value(x)' } };
+  expect(resolveCommand(claim, config)).toBe('gcloud run services describe star --format=value(x)');
+  expect(verifyPin(claim, { runCommand: () => 'star-00049-j5r', config }).ok).toBe(true);
+});
+
 // A value-to-command rewrite marks itself with a `run:` marker immediately
 // before the backticked invocation. Fix 1 (2026-08-14 review): the earlier
 // shape (any backticked span with a space) had no marker at all, so

@@ -64,7 +64,7 @@ function unwrapOnce(s, delim) {
   return inner;
 }
 
-function stripOuterMarkup(text) {
+export function stripOuterMarkup(text) {
   let s = text.trim();
   let changed = true;
   while (changed) {

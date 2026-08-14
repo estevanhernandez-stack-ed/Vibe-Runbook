@@ -41,6 +41,7 @@ function walkDir({ claims, config, env = 'stub' }) {
     cwd: dir,
     encoding: 'utf8',
     env: { ...process.env, [`VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN`]: 'stub-token' },
+    timeout: 20_000, // defense in depth: fetchStatus's own 10s AbortSignal should always win first
   });
   const written = JSON.parse(readFileSync(join(dir, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
   return { report: out, claims: written.claims };
@@ -151,6 +152,54 @@ test("a status assertion's url resolves from config.urls before verifyStatus run
   // Whatever the outcome, it must not be the specific "nothing to check"
   // failure Fix 3 exists to close.
   expect(claims[0].evidence ?? '').not.toMatch(/no url for this status assertion/i);
+});
+
+// Fix 1 (2026-08-14 re-review #2): the previous probe() shelled to
+// `curl -s -o /dev/null ...`, which was broken on Windows two ways --
+// nonzero exit against an unreachable target regardless of reachability,
+// and an outright hang against a REAL reachable one (both confirmed
+// directly with a throwaway script, not assumed). The natural test here
+// would spin up a local server and point `walk` at it, but this dev
+// sandbox itself cannot route 127.0.0.1 between a spawned child process
+// and the server its parent bound -- confirmed directly too: identical
+// hang for both curl and fetch against a same-machine sibling-process
+// server, sandbox flag on or off, while a spawned child reaching a real
+// external host works fine every time. So these two use a real, stable
+// external target (example.com, IANA's reserved documentation domain --
+// not going anywhere, not rate-limited) to prove fetch genuinely completes
+// a round trip and reports the true status, which is what this fix is
+// actually about: PASS wasn't previously reachable on Windows at all.
+test('walk probes a status assertion with fetch and PASSes on a real match, no shell involved', () => {
+  const { claims } = walkDir({
+    claims: [
+      {
+        id: 'c-8', shape: 'status-assertion', venue: 'executable', text: 'answers 200 ok',
+        cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
+        source: { file: 'runbook.md', line: 1 },
+      },
+    ],
+    config: { urls: { 'c-8': 'https://example.com/' } },
+  });
+  expect(claims[0].verdict).toBe('PASS');
+  expect(claims[0].evidence).toContain('200');
+});
+
+// A status assertion that disagrees with the live system is a FAIL, not a
+// BLOCKED -- fetch has to surface the real mismatched code, not just "it
+// connected."
+test('walk probes a status assertion with fetch and FAILs on a real mismatch', () => {
+  const { claims } = walkDir({
+    claims: [
+      {
+        id: 'c-9', shape: 'status-assertion', venue: 'executable', text: 'answers 200 ok',
+        cost: { raw: null, count: null }, verdict: null, evidence: null, checkedAt: null,
+        source: { file: 'runbook.md', line: 1 },
+      },
+    ],
+    config: { urls: { 'c-9': 'https://example.com/definitely-not-a-real-path-xyz123' } },
+  });
+  expect(claims[0].verdict).toBe('FAIL');
+  expect(claims[0].evidence).toContain('404');
 });
 
 test('a status assertion with no resolvable url is an actionable BLOCKED', () => {

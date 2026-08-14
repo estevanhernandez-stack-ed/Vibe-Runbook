@@ -18,10 +18,21 @@ const credentialFor = (env) => {
     : { present: false, ask: `set VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN for environment "${env}"` };
 };
 
-const probe = (url) => {
-  const out = execSync(`curl -s -o /dev/null -w "%{http_code}" ${JSON.stringify(url)}`, { encoding: 'utf8' });
-  return Number.parseInt(out.trim(), 10);
-};
+// Node's own fetch, not a shell-out (Fix 1, 2026-08-14 re-review #2). The
+// earlier binding shelled to `curl -s -o /dev/null -w "%{http_code}" <url>`,
+// which was broken on Windows two ways, both confirmed directly rather than
+// assumed: against an unreachable target it exited nonzero regardless of
+// reachability, because /dev/null is not a real path under cmd.exe (curl
+// error 23, write error); against a REAL reachable local server it hung
+// outright under execSync -- timed out rather than erroring -- which is
+// worse than a wrong verdict. fetch removes the shell, the null-sink
+// assumption, and the platform difference in one move. A 10s AbortSignal
+// keeps a dead or slow endpoint from ever hanging a walk the way the old
+// binding just did.
+async function fetchStatus(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  return res.status;
+}
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -81,6 +92,32 @@ if (command === 'scan') {
   }
 
   const config = loadConfig();
+
+  // verifyStatus calls its httpProbe argument synchronously and expects a
+  // return value back, not a Promise -- that contract in verify.mjs does
+  // not change. fetch is inherently async, so every reachable url is
+  // probed up front, here, where `await` is available (this file is an ES
+  // module; top-level await works). The function actually handed to
+  // verifyStatus below is a plain synchronous lookup into what was already
+  // fetched -- a cost-flagged or unresolvable url is never in this map, so
+  // it is never probed either.
+  const probeResults = new Map();
+  for (const c of state.claims) {
+    if (c.shape !== 'status-assertion') continue;
+    if ((c.cost?.count ?? 0) > 0) continue; // never probes a claim that spends
+    const url = resolveUrl(c, config);
+    if (!url || probeResults.has(url)) continue;
+    try {
+      probeResults.set(url, { status: await fetchStatus(url) });
+    } catch (e) {
+      probeResults.set(url, { error: e });
+    }
+  }
+  const probe = (url) => {
+    const r = probeResults.get(url);
+    if (r?.error) throw r.error;
+    return r?.status;
+  };
 
   const walked = state.claims.map((c) => {
     // Gate BEFORE the call, not after. `assignVerdict(c, verifyPin(...))`

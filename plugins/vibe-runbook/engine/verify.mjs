@@ -1,3 +1,5 @@
+import { stripOuterMarkup } from './classify.mjs';
+
 // Codes a framework returns when it validated the body before checking auth.
 const VALIDATION_CODES = new Set([400, 422]);
 
@@ -28,11 +30,21 @@ const SELF_ANSWERING_RE = /run:\s*`([^`]+)`/i;
 //      never reaches the comparison this function feeds.
 //   2. .vibe-runbook/config.json, keyed by the pin's label.
 //   3. Nothing, which is BLOCKED and points at the remediation.
+//
+// The label used to be split off raw claim.text, so a markdown-wrapped pin
+// -- "**Revision `star-00049-j5r`**", the real shape extract.mjs produces
+// from a preamble -- keyed under the literal "**revision", not "revision"
+// (Fix 2, 2026-08-14 re-review: nobody hand-writing config.pins would guess
+// that key, and guessing wrong reads as a BLOCKED telling them to add an
+// entry they already added). classify.mjs's stripOuterMarkup already solves
+// "peel the wrapping a runbook author's markdown adds, without touching
+// content that happens to sit at the edges" for rule matching; reused here
+// rather than re-solving it, so there is one normalizer, not two.
 export function resolveCommand(claim, config = {}) {
   if (claim.command) return claim.command;
   const selfAnswering = claim.text.match(SELF_ANSWERING_RE);
   if (selfAnswering) return selfAnswering[1];
-  const label = claim.text.split(/[:`]/)[0].trim().toLowerCase();
+  const label = stripOuterMarkup(claim.text).split(/[:`]/)[0].trim().toLowerCase();
   return config.pins?.[label] ?? null;
 }
 
