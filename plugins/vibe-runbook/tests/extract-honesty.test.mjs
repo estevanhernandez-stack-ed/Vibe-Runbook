@@ -47,3 +47,38 @@ test('a sparsely-marked runbook (nonzero markers, low ratio) gets honest guidanc
   expect(coverage.guidance).toEqual(expect.stringContaining('tests/synthetic-sparse.md'));
   expect(coverage.guidance).toEqual(expect.stringContaining('**Right:**'));
 });
+
+// Regression for the real hole logical-block grouping opened: a document
+// whose prose is NOT blank-line-separated -- pasted logs, tool-generated
+// docs, casually written runbooks -- has every unbroken paragraph swallow
+// its neighbors into one giant logical unit. Counting totalBlocks *from
+// those units* (as a prior version of this file did) let a 402-line, two-marker
+// document collapse to a handful of units and read as nearly 100% marked.
+// totalBlocks has to come from physical content lines regardless of how
+// extraction groups them, or this exact document reads 'high' while being
+// truly ~0.5% marked.
+test('markers embedded in dense, non-blank-separated prose still yield low confidence', () => {
+  const denseProse = (label) => Array.from(
+    { length: 200 },
+    (_, i) => `${label} line ${i} of unbroken operational log output with no blank line between any of it.`,
+  ).join('\n');
+
+  const synthetic = [
+    '# Title',
+    '',
+    '## Section one',
+    '**Right:** the deploy finishes with a green status',
+    denseProse('alpha'),
+    '',
+    '## Section two',
+    '**Wrong:** the deploy hangs at the health check',
+    denseProse('beta'),
+    '',
+  ].join('\n');
+
+  const { coverage } = extractClaims(synthetic, 'tests/synthetic-dense.md');
+
+  expect(coverage.markedBlocks).toBe(2);
+  expect(coverage.totalBlocks).toBeGreaterThan(390);
+  expect(coverage.confidence).toBe('low');
+});

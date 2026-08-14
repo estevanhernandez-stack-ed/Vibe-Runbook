@@ -70,10 +70,14 @@ function stripListMarker(line) {
 // Walks `text` once, treating a `**bold**` or `` `backtick` `` span as
 // atomic, and splits on top-level occurrences of `char` — one that falls
 // outside both kinds of span. A comma inside "`24 scenes · 67 claims`" or a
-// period inside "**...are open.**" is content, never a boundary.
+// period inside "**...are open.**" is content, never a boundary. Each
+// returned segment carries `start`, its 0-indexed offset within `text` —
+// callers use that to trace a segment back to the physical line it actually
+// came from, rather than crediting it to wherever its paragraph began.
 function splitTopLevel(text, char) {
   const segments = [];
   let cur = '';
+  let curStart = 0;
   let i = 0;
   while (i < text.length) {
     if (text[i] === '`') {
@@ -91,16 +95,25 @@ function splitTopLevel(text, char) {
       continue;
     }
     if (text[i] === char) {
-      segments.push(cur);
+      segments.push({ text: cur, start: curStart });
       cur = '';
       i += 1;
+      curStart = i;
       continue;
     }
     cur += text[i];
     i += 1;
   }
-  segments.push(cur);
+  segments.push({ text: cur, start: curStart });
   return segments;
+}
+
+// Trims `raw` and shifts its offset to match — trimming a segment's leading
+// whitespace away must not lose track of where its *content* actually
+// starts.
+function trimWithOffset(raw, baseOffset) {
+  const leading = raw.length - raw.trimStart().length;
+  return { text: raw.trim(), start: baseOffset + leading };
 }
 
 // A document with almost no marked blocks is one we cannot read, and saying
@@ -128,14 +141,34 @@ function markupGuidance(filePath, totalBlocks, markedBlocks) {
   ].join('\n');
 }
 
+// The density ratio's denominator: how much document there actually is, in
+// physical lines, independent of how extraction groups those lines into
+// claims. Grouping and counting used to be the same pass — a claim that
+// joined ten physical lines into one unit also collapsed those ten lines
+// into one count — which is exactly backwards for a ratio whose job is to
+// catch a mostly-unmarked document. A blank line and a heading carry no
+// content; a bare blockquote line (just ">", the paragraph break inside a
+// preamble) carries none either. Everything else is one block, whether or
+// not extraction later folds it into a bigger claim.
+function countContentLines(lines) {
+  let count = 0;
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    if (isHeadingLine(line)) continue;
+    if (isBlockquoteLine(line) && stripBlockquotePrefix(line).trim() === '') continue;
+    count += 1;
+  }
+  return count;
+}
+
 // Groups a run of physical lines into logical units for the body scan. A
 // unit is a maximal run of continuation lines belonging to one marker line,
 // one list item, or one unmarked paragraph — a blank line, a heading, and a
 // new list item's own bullet all end the current unit and start the next.
 // This is the join that lets a `**Right:**` sentence (or a list item under
-// one) that wraps across physical lines reach the marker regex whole, and
-// it is why totalBlocks below counts logical blocks instead of physical
-// lines: a three-line sentence is one checkable claim, not three.
+// one) that wraps across physical lines reach the marker regex whole. It
+// exists purely to assemble claims — countContentLines above is where the
+// ratio's denominator comes from, deliberately not this.
 function groupIntoUnits(lines, startIdx, endIdxExclusive) {
   const units = [];
   let cur = null;
@@ -172,10 +205,22 @@ function isMarkerText(text) {
   return MARKERS.some((mk) => mk.re.test(text) || mk.bareRe.test(text));
 }
 
+// The physical line that contains a given offset into a paragraph's joined
+// text. `boundaries` is ordered by offset, one entry per physical line that
+// fed the paragraph; the last boundary at or before `offset` is the line
+// that offset actually landed on.
+function lineForOffset(boundaries, offset) {
+  let line = boundaries.length ? boundaries[0].line : null;
+  for (const b of boundaries) {
+    if (b.start > offset) break;
+    line = b.line;
+  }
+  return line;
+}
+
 export function extractClaims(markdown, filePath) {
   const lines = markdown.split(/\r?\n/);
   const claims = [];
-  let totalBlocks = 0;
   let markedBlocks = 0;
   let n = 0;
 
@@ -194,14 +239,25 @@ export function extractClaims(markdown, filePath) {
     // Group the blockquote into logical paragraphs before recognizing
     // anything in it — markdown wraps a paragraph across physical lines,
     // and a bare blockquote line ("just >") is the paragraph break, the
-    // same way it reads to a person.
+    // same way it reads to a person. `boundaries` remembers which physical
+    // line fed which offset of the joined text, so a claim found anywhere
+    // in the paragraph can be traced back to the line it actually starts
+    // on instead of the paragraph's first line.
     const paragraphs = [];
     let curLines = [];
-    let curStart = null;
     const flushParagraph = () => {
-      if (curLines.length) paragraphs.push({ text: curLines.join(' '), startLine: curStart });
+      if (curLines.length) {
+        let offset = 0;
+        const boundaries = [];
+        const parts = [];
+        for (const entry of curLines) {
+          boundaries.push({ start: offset, line: entry.line });
+          parts.push(entry.text);
+          offset += entry.text.length + 1; // +1 for the joining space
+        }
+        paragraphs.push({ text: parts.join(' '), boundaries });
+      }
       curLines = [];
-      curStart = null;
     };
     for (let i = 0; i <= preambleEnd; i += 1) {
       const raw = lines[i];
@@ -214,18 +270,17 @@ export function extractClaims(markdown, filePath) {
         flushParagraph();
         continue;
       }
-      if (curLines.length === 0) curStart = i + 1;
-      curLines.push(content);
+      curLines.push({ text: content, line: i + 1 });
     }
     flushParagraph();
 
-    for (const { text: paragraphText, startLine } of paragraphs) {
+    for (const { text: paragraphText, boundaries } of paragraphs) {
       const seenInParagraph = new Set();
       // Split into sentences so a comma inside an earlier, unrelated clause
       // of the same paragraph never bleeds into a pin-list sentence
       // elsewhere in it.
       for (const rawSentence of splitTopLevel(paragraphText, '.')) {
-        const sentence = rawSentence.trim();
+        const { text: sentence, start: sentenceStart } = trimWithOffset(rawSentence.text, rawSentence.start);
         if (!sentence) continue;
 
         if (sentence.includes('`')) {
@@ -236,14 +291,14 @@ export function extractClaims(markdown, filePath) {
           // becomes its own claim including the bare-prose ones that
           // carry no bold or backtick at all.
           for (const rawSeg of splitTopLevel(sentence, ',')) {
-            const seg = rawSeg.trim();
+            const { text: seg, start: segStart } = trimWithOffset(rawSeg.text, sentenceStart + rawSeg.start);
             if (!seg || seenInParagraph.has(seg)) continue;
             if (/^\*\*.*\*\*$/.test(seg) && isVacuousLabel(seg)) continue;
             seenInParagraph.add(seg);
             n += 1;
             claims.push({
               id: `c-${String(n).padStart(3, '0')}`,
-              source: { file: filePath, line: startLine },
+              source: { file: filePath, line: lineForOffset(boundaries, segStart) },
               text: seg,
               marker: 'preamble',
             });
@@ -265,7 +320,7 @@ export function extractClaims(markdown, filePath) {
             n += 1;
             claims.push({
               id: `c-${String(n).padStart(3, '0')}`,
-              source: { file: filePath, line: startLine },
+              source: { file: filePath, line: lineForOffset(boundaries, sentenceStart + m.index) },
               text,
               marker: 'preamble',
             });
@@ -286,7 +341,6 @@ export function extractClaims(markdown, filePath) {
   while (u < units.length) {
     const unit = units[u];
     const text = joinUnit(unit);
-    totalBlocks += 1;
 
     const inline = MARKERS.find((mk) => mk.re.test(text));
     if (inline) {
@@ -314,7 +368,6 @@ export function extractClaims(markdown, filePath) {
         while (k < units.length && units[k].isListItem) {
           const itemText = joinUnit(units[k]);
           markedBlocks += 1;
-          totalBlocks += 1;
           n += 1;
           claims.push({
             id: `c-${String(n).padStart(3, '0')}`,
@@ -330,7 +383,6 @@ export function extractClaims(markdown, filePath) {
       const nextText = next ? joinUnit(next) : null;
       if (next && !isMarkerText(nextText)) {
         markedBlocks += 1;
-        totalBlocks += 1;
         n += 1;
         claims.push({
           id: `c-${String(n).padStart(3, '0')}`,
@@ -350,6 +402,7 @@ export function extractClaims(markdown, filePath) {
     u += 1;
   }
 
+  const totalBlocks = countContentLines(lines);
   const ratio = totalBlocks === 0 ? 0 : markedBlocks / totalBlocks;
   const confidence = ratio < LOW_CONFIDENCE_RATIO ? 'low' : 'high';
   return {

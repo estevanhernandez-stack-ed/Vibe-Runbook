@@ -93,3 +93,32 @@ test('a bare marker reaches into the bulleted list under it, one claim per item'
   expect(fromTheList).toBeDefined();
   expect(fromTheList.source.line).toBe(165);
 });
+
+// Regression: one startLine used to be stamped per paragraph, and every
+// sentence/segment claim inherited it regardless of which physical line its
+// own text actually came from — c-001 through c-004 all reported line 3,
+// the paragraph's first line, while their text actually lives on lines 4
+// and 5. Assert against the real fixture, not a synthetic string: read the
+// line the claim reports and confirm that line's own content contains the
+// claim's key substring.
+test('a preamble claim reports the physical line its own text actually starts on', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const starClaim = claims.find((c) => c.text.includes('star-00049-j5r'));
+  expect(starClaim).toBeDefined();
+
+  const actualLine = star.split(/\r?\n/)[starClaim.source.line - 1];
+  expect(actualLine).toEqual(expect.stringContaining('star-00049-j5r'));
+});
+
+// Same paragraph, sharper regression: the four pin-list segments span two
+// physical lines (4 and 5), not one. If source-line tracking regresses back
+// to "one line per paragraph", every one of these would collapse onto the
+// same line again.
+test('the pin-list segments in one paragraph do not all collapse onto the same source line', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const needles = ['star-00049-j5r', '0855bd2', '931 tests green', 'working tree in sync'];
+  const lines = needles.map((needle) => claims.find((c) => c.text.includes(needle))?.source.line);
+
+  expect(lines.every((l) => typeof l === 'number')).toBe(true);
+  expect(new Set(lines).size).toBeGreaterThan(1);
+});
