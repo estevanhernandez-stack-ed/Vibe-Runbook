@@ -1,4 +1,4 @@
-import { stripOuterMarkup } from './classify.mjs';
+import { stripOuterMarkup, stripLeadingListPunctuation } from './classify.mjs';
 
 // Codes a framework returns when it validated the body before checking auth.
 const VALIDATION_CODES = new Set([400, 422]);
@@ -48,11 +48,21 @@ export function isSelfAnswering(claim) {
 // "peel the wrapping a runbook author's markdown adds, without touching
 // content that happens to sit at the edges" for rule matching; reused here
 // rather than re-solving it, so there is one normalizer, not two.
+//
+// Round 3, Fix 3: the same drift, one layer earlier. classify.mjs's pin
+// rule tolerates a leading list/quote marker before the label ("- revision:
+// ...", STAR's own real header pin), but this derivation didn't strip that
+// same prefix -- a claim that correctly classified as `pin` and showed a
+// config key a user would reasonably guess ("revision") still couldn't
+// resolve it, because the label derived here was "- revision", not
+// "revision". stripLeadingListPunctuation is the same pattern the pin rule
+// tests against, exported from classify.mjs rather than kept as a second,
+// silently-driftable copy.
 export function resolveCommand(claim, config = {}) {
   if (claim.command) return claim.command;
   const selfAnswering = claim.text.match(SELF_ANSWERING_RE);
   if (selfAnswering) return selfAnswering[1];
-  const label = stripOuterMarkup(claim.text).split(/[:`]/)[0].trim().toLowerCase();
+  const label = stripOuterMarkup(stripLeadingListPunctuation(claim.text)).split(/[:`]/)[0].trim().toLowerCase();
   return config.pins?.[label] ?? null;
 }
 

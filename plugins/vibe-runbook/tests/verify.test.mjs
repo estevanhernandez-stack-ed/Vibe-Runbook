@@ -99,6 +99,31 @@ test('verifyPin never executes an ordinary backticked value as a shell command',
   expect(calls).toBe(0);
 });
 
+// Round 3, Fix 3: the label classify.mjs's pin rule accepts (a leading
+// list/quote marker before the label -- STAR's own real header pin,
+// "- revision: `gcloud ...`") was never the label resolveCommand derived.
+// `stripOuterMarkup(text).split(/[:\`]/)[0]` kept the "- " prefix intact,
+// so a claim that correctly classifies as `pin` and shows in the report
+// could not resolve a `config.pins.revision` entry -- the exact real shape
+// this widening was built to fix (STAR/docs/smoke-2026-08-12.md's header),
+// still telling the user to add a config key they cannot spell, because
+// the obvious guess ("revision") never matched.
+test('resolveCommand derives the same label the pin rule accepts, leading list punctuation and all (the real STAR shape)', () => {
+  const claim = {
+    text: '- revision: `gcloud run services describe star --project star-research-dept --region us-central1 --format=value(status.latestReadyRevisionName)`',
+  };
+  const config = { pins: { revision: 'gcloud run services describe star --format=value(x)' } };
+  expect(resolveCommand(claim, config)).toBe('gcloud run services describe star --format=value(x)');
+  // Before the fix this was BLOCKED "no command for this pin" -- a
+  // config.pins.revision entry existed and still couldn't be found, because
+  // the label derived here ("- revision") never matched the label the pin
+  // rule itself accepts ("revision"). Asserting not-blocked, rather than
+  // .ok, keeps this test about label derivation and not about pinValue's
+  // separate (and here, unrelated) value-extraction heuristic.
+  const r = verifyPin(claim, { runCommand: () => 'star-00049-j5r', config });
+  expect(r.blocked).toBeUndefined();
+});
+
 // Marker widening, change 3: classify.mjs now reads a labelled backtick span
 // like `Version: `2.1.0`` as shape 'pin' so it shows up in the report. That
 // is a classification change only -- resolveCommand has no idea what

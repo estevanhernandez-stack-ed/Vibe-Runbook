@@ -86,6 +86,21 @@ function unwrapOnce(s, delim) {
   return inner;
 }
 
+// The same leading list/quote punctuation the pin rule above tolerates in
+// front of a label ("- revision: ...", "1. version: ...", "> - HEAD: ...")
+// -- factored out so a caller deriving a label the same way the pin rule
+// recognizes one (verify.mjs's resolveCommand) strips the same prefix
+// rather than keeping a second, silently-drifted copy of the pattern. That
+// drift already happened once: STAR's real header pin classified as `pin`
+// here while resolveCommand's own label derivation kept the "- " prefix,
+// so a `config.pins.revision` entry a user would reasonably guess could
+// never resolve.
+const LEADING_LIST_PUNCTUATION_RE = /^\s*(?:(?:[-*+>]|\d+[.)])\s+)*/;
+
+export function stripLeadingListPunctuation(text) {
+  return text.replace(LEADING_LIST_PUNCTUATION_RE, '');
+}
+
 export function stripOuterMarkup(text) {
   let s = text.trim();
   let changed = true;
