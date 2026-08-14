@@ -48,3 +48,16 @@ test('preamble claims carry the same id/source/text shape as marker claims, and 
   }
   expect(coverage.extracted).toBe(claims.length);
 });
+
+test('drops vacuous label-only preamble candidates, keeps the pin claims that motivate the recognizer', () => {
+  const { claims } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const texts = claims.map((c) => c.text);
+  // star-smoke.md:7 and :12 — plain section-intro labels with nothing
+  // checkable inside them. A marker-only reader would never see these as
+  // claims at all; the preamble recognizer must not invent them either.
+  expect(texts).not.toContain('**Where you are:**');
+  expect(texts).not.toContain('**Why this list exists.**');
+  // The pins are the reason the recognizer exists — must still survive.
+  expect(texts.some((t) => t.includes('star-00049-j5r'))).toBe(true);
+  expect(texts.some((t) => t.includes('0855bd2'))).toBe(true);
+});

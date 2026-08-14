@@ -1,5 +1,9 @@
 // Markers a runbook may use to flag a checkable claim. Este's habit is the
 // seed set; the honesty gate in Task 2 is what keeps unmarked docs truthful.
+// Each regex requires content after the marker on the same line — a bare
+// `**Right:**` whose content lives in a bulleted list below it (not on the
+// same line) is not matched. Known, accepted limitation of the line-based
+// scan; see star-smoke.md:163 for a real instance.
 const MARKERS = [
   { name: 'right', re: /^\s*\*\*Right(?:,[^*]*)?:\*\*\s*(.+)$/i },
   { name: 'wrong', re: /^\s*\*\*Wrong[^*]*:\*\*\s*(.+)$/i },
@@ -10,11 +14,26 @@ const MARKERS = [
 // or "HEAD `0855bd2`" — the highest-value claims in a real runbook live in its
 // opening blockquote with no **Right:**/**Wrong:** marker at all. Over-extraction
 // here is fine: a later task's classifier routes anything it can't identify to
-// `unknown`, which reports as a QUESTION rather than a false failure.
+// `unknown`, which reports as a QUESTION rather than a false failure. Vacuous
+// section-intro labels ("**Where you are:**", "**Why this list exists.**")
+// are filtered out below by isVacuousLabel — they carry no checkable value,
+// and a report that flags meaningless items trains its reader to stop
+// reading it.
 const PREAMBLE_PATTERNS = [
-  /\*\*[^*]+\*\*/g,
-  /`[^`]+`/g,
+  { kind: 'bold', re: /\*\*[^*]+\*\*/g },
+  { kind: 'backtick', re: /`[^`]+`/g },
 ];
+
+// True when a bold span is nothing but a plain-English section-intro label —
+// no backtick, no digit, no quoted/id-shaped content — terminated by ':' or
+// '.'. e.g. "**Where you are:**" or "**Why this list exists.**". A capture
+// that contains a backticked span, or any alphanumeric token beyond the
+// label itself (a digit, an id, a number), is never vacuous.
+function isVacuousLabel(text) {
+  const inner = text.replace(/^\*\*/, '').replace(/\*\*$/, '').trim();
+  if (/`/.test(inner)) return false;
+  return /^[A-Za-z][A-Za-z\s',-]*[:.]$/.test(inner);
+}
 
 function isBlockquoteLine(line) {
   return /^\s*>/.test(line);
@@ -48,12 +67,13 @@ export function extractClaims(markdown, filePath) {
       if (!isBlockquoteLine(raw)) continue;
       const content = stripBlockquotePrefix(raw);
       const seenOnLine = new Set();
-      for (const pattern of PREAMBLE_PATTERNS) {
-        pattern.lastIndex = 0;
+      for (const { kind, re } of PREAMBLE_PATTERNS) {
+        re.lastIndex = 0;
         let m;
-        while ((m = pattern.exec(content)) !== null) {
+        while ((m = re.exec(content)) !== null) {
           const text = m[0].trim();
           if (!text || seenOnLine.has(text)) continue;
+          if (kind === 'bold' && isVacuousLabel(text)) continue;
           seenOnLine.add(text);
           n += 1;
           claims.push({
