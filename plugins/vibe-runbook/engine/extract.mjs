@@ -221,6 +221,14 @@ function lineForOffset(boundaries, offset) {
 export function extractClaims(markdown, filePath) {
   const lines = markdown.split(/\r?\n/);
   const claims = [];
+  // Every block this pass recognized as carrying a claim, marker-tagged or
+  // preamble alike. Preamble claims used to increment nothing (Fix 7,
+  // 2026-08-14 final review), which put the report's two headline fractions
+  // in open contradiction: 'read 17 of 229 content blocks' above 'checked 2
+  // of 22 enumerated'. 22 > 17 is impossible on its face, and it excluded
+  // exactly the claims the report then acted on -- the pins in the opening
+  // blockquote. One increment per claim pushed, everywhere, is the invariant:
+  // markedBlocks can never be less than claims.length.
   let markedBlocks = 0;
   let n = 0;
 
@@ -295,6 +303,7 @@ export function extractClaims(markdown, filePath) {
             if (!seg || seenInParagraph.has(seg)) continue;
             if (/^\*\*.*\*\*$/.test(seg) && isVacuousLabel(seg)) continue;
             seenInParagraph.add(seg);
+            markedBlocks += 1;
             n += 1;
             claims.push({
               id: `c-${String(n).padStart(3, '0')}`,
@@ -317,6 +326,7 @@ export function extractClaims(markdown, filePath) {
             if (!text || seenInParagraph.has(text)) continue;
             if (kind === 'bold' && isVacuousLabel(text)) continue;
             seenInParagraph.add(text);
+            markedBlocks += 1;
             n += 1;
             claims.push({
               id: `c-${String(n).padStart(3, '0')}`,

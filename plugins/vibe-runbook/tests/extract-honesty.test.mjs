@@ -20,6 +20,40 @@ test('low confidence carries actionable markup guidance naming the file', () => 
   expect(coverage.guidance).toEqual(expect.stringContaining('tests/fixtures/unmarked.md'));
 });
 
+// Fix 7 (2026-08-14 final review): the two headline fractions in the report
+// contradicted each other -- 'read 17 of 229 content blocks' above 'checked
+// 2 of 22 enumerated', where 22 > 17 is impossible on its face. The cause was
+// an undercount, not a wording problem: every body claim incremented
+// markedBlocks, and preamble claims (the highest-value ones, the pins in the
+// opening blockquote) incremented nothing. A reader cannot be asked to
+// reconcile a numerator that excludes the very claims the report then acts on.
+test('a preamble claim counts toward markedBlocks, so the two fractions cannot contradict', () => {
+  const { claims, coverage } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  const preambleClaims = claims.filter((c) => c.marker === 'preamble');
+
+  expect(preambleClaims.length).toBeGreaterThan(0);
+  expect(coverage.markedBlocks).toBeGreaterThanOrEqual(claims.length);
+  expect(coverage.markedBlocks).toBeLessThanOrEqual(coverage.totalBlocks);
+});
+
+// The invariant stated as a rule rather than as a fixture number: the
+// enumerated-claims denominator can never exceed the recognized-blocks
+// numerator, on any document. Holds for the marked fixture and the unmarked
+// one, which is where a regression would show up as 0 claims over 0 blocks.
+test('claims never outnumber the blocks credited as read, on either fixture', () => {
+  for (const [src, name] of [[star, 'star-smoke.md'], [unmarked, 'unmarked.md']]) {
+    const { claims, coverage } = extractClaims(src, name);
+    expect(coverage.markedBlocks).toBeGreaterThanOrEqual(claims.length);
+  }
+});
+
+test('the STAR fixture still reads high confidence after the preamble claims are counted', () => {
+  const { coverage } = extractClaims(star, 'tests/fixtures/star-smoke.md');
+  expect(coverage.markedBlocks).toBe(22);
+  expect(coverage.totalBlocks).toBe(229);
+  expect(coverage.confidence).toBe('high');
+});
+
 test('a marked runbook yields high confidence', () => {
   const { coverage } = extractClaims(star, 'tests/fixtures/star-smoke.md');
   expect(coverage.confidence).toBe('high');
