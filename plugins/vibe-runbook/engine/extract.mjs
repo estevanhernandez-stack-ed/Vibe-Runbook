@@ -1,4 +1,5 @@
-import { STUB_RE } from './stubs.mjs';
+import { matchStub } from './stubs.mjs';
+import { fenceDelimiter, fenceCloses } from './fence.mjs';
 
 // Markers a runbook may use to flag a checkable claim. Este's habit is the
 // seed set; the honesty gate in Task 2 is what keeps unmarked docs truthful.
@@ -71,39 +72,6 @@ function stripListMarker(line) {
 
 function isTableRowStart(line) {
   return /^\s*\|/.test(line);
-}
-
-// A fence opens with 3+ backticks or 3+ tildes (CommonMark allows either,
-// and more than three), optionally followed by an info string ("```bash").
-// Indentation is capped at 3 spaces, matching CommonMark's rule for an
-// unindented-enough fence -- a 4-space indent belongs to an indented code
-// block, not a fence, and left uncapped a stray 4-space-indented ``` (an
-// author showing literal backtick syntax in a paragraph, not opening a
-// real fence) opened a phantom fence that swallowed every real line
-// written after it. Returns the exact marker string matched so a caller
-// can require the same character and at least the same length to close it
-// -- a `~~~` block doesn't close on an unrelated ``` a shell heredoc
-// happens to contain, and vice versa.
-function fenceDelimiter(line) {
-  const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-  return m ? m[1] : null;
-}
-
-// A closing fence is stricter than an opener: CommonMark permits *only*
-// the fence characters and trailing whitespace on a closing line, never an
-// info string. Accepting one (this function's original shape) let an
-// illustrated nested-fence example -- a runbook showing what fenced
-// markdown looks like, e.g. an outer ```markdown fence whose own body
-// shows ```bash -- close the outer fence early on its own inner-example
-// opener, expose that illustration to ordinary prose scanning, and then
-// re-open a phantom fence on what should have been the outer fence's real
-// close: parity flips, and everything written after it is silently
-// swallowed through EOF.
-function fenceCloses(line, opener) {
-  const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-  if (!m) return false;
-  const closer = m[1];
-  return closer[0] === opener[0] && closer.length >= opener.length;
 }
 
 // Walks `text` once, treating a `**bold**` or `` `backtick` `` span as
@@ -298,7 +266,7 @@ function groupIntoUnits(lines, startIdx, endIdxExclusive) {
       continue;
     }
 
-    if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw) || STUB_RE.test(raw)) {
+    if (raw.trim() === '' || isHeadingLine(raw) || isBlockquoteLine(raw) || matchStub(raw)) {
       // A stub line is real content a reader sees (countContentLines below
       // still counts it) but it is not a claim -- there is nothing to check
       // in an admission that a section wasn't written. Excluding it here
@@ -462,7 +430,7 @@ export function extractClaims(markdown, filePath) {
         continue;
       }
       const content = stripBlockquotePrefix(raw).trim();
-      if (content === '' || STUB_RE.test(content)) {
+      if (content === '' || matchStub(content)) {
         // A stub can only ever be a paragraph break here, never content: an
         // unwritten section is not a claim, so a blockquoted one must not
         // reach the preamble pass any more than a bare one reaches the body
