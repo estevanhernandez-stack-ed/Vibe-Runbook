@@ -1,0 +1,35 @@
+import { classifyShape } from '../engine/classify.mjs';
+
+test('a labelled identifier is a pin', () => {
+  expect(classifyShape('Revision `star-00049-j5r`').shape).toBe('pin');
+  expect(classifyShape('HEAD `0855bd2`').shape).toBe('pin');
+  expect(classifyShape('931 tests green').shape).toBe('pin');
+});
+
+test('a totality quantifier over a count is a receipt', () => {
+  expect(classifyShape('The chain walk over all 17 stored rooms').shape).toBe('receipt');
+  expect(classifyShape('re-read as CSV with all 45 rows and 10 columns intact').shape).toBe('receipt');
+});
+
+test('a present-tense claim about a response code is a status assertion', () => {
+  expect(classifyShape('Every new route answers 401 unauthenticated').shape).toBe('status-assertion');
+});
+
+test('a sensory instruction is human', () => {
+  expect(classifyShape('Read it on screen, then Ctrl+P and read the PDF').shape).toBe('human');
+  expect(classifyShape('open in Excel and Sheets').shape).toBe('human');
+});
+
+// The hard case, and the one that matters most. Present tense, but it refers
+// to a past artifact. Both "pin" and "receipt" are wrong answers. Escalating
+// is the right answer.
+test('an ambiguous claim escalates to unknown rather than guessing', () => {
+  const r = classifyShape('Your Liverpool export says 58');
+  expect(r.shape).toBe('unknown');
+  expect(r.confidence).toBe(0);
+});
+
+test('every classification names the rule that fired', () => {
+  expect(classifyShape('Revision `star-00049-j5r`').rule).toBe('pin:labelled-identifier');
+  expect(classifyShape('Your Liverpool export says 58').rule).toBe('none');
+});
