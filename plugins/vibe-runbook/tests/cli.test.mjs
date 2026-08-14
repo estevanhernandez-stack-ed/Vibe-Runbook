@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runWalk } from '../engine/cli.mjs';
+import { runWalk, makeProbe } from '../engine/cli.mjs';
+import { renderReport } from '../engine/report.mjs';
 
 const cli = fileURLToPath(new URL('../engine/cli.mjs', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/star-smoke.md', import.meta.url));
@@ -42,7 +43,7 @@ function walkDir({ claims, config, env = 'stub' }) {
     cwd: dir,
     encoding: 'utf8',
     env: { ...process.env, [`VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN`]: 'stub-token' },
-    timeout: 20_000, // defense in depth: fetchStatus's own 10s AbortSignal should always win first
+    timeout: 20_000, // defense in depth: makeProbe's own 10s AbortSignal should always win first
   });
   const written = JSON.parse(readFileSync(join(dir, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
   return { report: out, claims: written.claims };
@@ -138,7 +139,7 @@ test('a pin missing both a self-answer and a config entry is an actionable BLOCK
 // Fix 2026-08-14 re-review #3, caught by the network-guard verification run
 // itself: this test used to point at a deliberately-unreachable local port
 // (127.0.0.1:1) on the theory that a refused connection never really
-// "touches the network." It still called the real fetchStatus binding
+// "touches the network." It still called the real probe binding
 // through the real CLI subprocess, and a global fetch guard confirmed it
 // really does call fetch() -- the guard tripped on this exact test before
 // the connection was ever refused. Rewritten through runWalk with a stub
@@ -199,7 +200,7 @@ test('a corrected config.urls entry is used on the next walk, not the url a prev
 // Fix 1 (2026-08-14 re-review #3): the previous version of this test hit a
 // real external host (example.com) to work around this sandbox being unable
 // to route loopback between a spawned child process and a server its own
-// parent bound (see fetchStatus's comment in cli.mjs). That was still a
+// parent bound (see makeProbe's comment in cli.mjs). That was still a
 // network-touching test -- it would fail on a plane, flake behind a
 // corporate proxy, and send real traffic on every `npm test`. This tests
 // the actual seam instead: `runWalk` takes an injected `probeUrl`, the same
@@ -268,4 +269,54 @@ test('a status assertion with no resolvable url is an actionable BLOCKED', () =>
   expect(claims[0].evidence).toMatch(/no url/i);
   expect(report).toMatch(/Needs your input to check/);
   expect(report).toContain('config.urls');
+});
+
+// ---------------------------------------------------------------------------
+// Fix 8 (2026-08-14 final review): the credential was a turnstile that opened
+// onto an unauthenticated probe. `walk` hard-stopped without
+// VIBE_RUNBOOK_<ENV>_TOKEN, checked it was present, discarded it, and then
+// probed with no Authorization header at all. A runbook claim like "the
+// dashboard returns 200" therefore got 401 back and produced a FAIL against a
+// runbook that was telling the truth -- the exact false-FAIL class the walk
+// protocol's "contract source beats the guess" rule exists to prevent.
+// ---------------------------------------------------------------------------
+
+test('the probe carries the credential as a bearer header', async () => {
+  let seen = null;
+  const probe = makeProbe('secret-token', async (url, init) => {
+    seen = { url, init };
+    return { status: 200 };
+  });
+
+  await expect(probe('https://stub.invalid/health')).resolves.toBe(200);
+  expect(seen.url).toBe('https://stub.invalid/health');
+  expect(seen.init.headers.Authorization).toBe('Bearer secret-token');
+});
+
+test('no token means no invented header, rather than the string "Bearer undefined"', async () => {
+  let seen = null;
+  const probe = makeProbe(undefined, async (url, init) => {
+    seen = init;
+    return { status: 200 };
+  });
+
+  await probe('https://stub.invalid/health');
+  expect(seen.headers).toEqual({});
+  expect(JSON.stringify(seen)).not.toContain('undefined');
+});
+
+// Invariant 5 of the guide: never print a secret. The token authenticates the
+// probe and must not survive into anything the reader sees, on any verdict.
+test('the credential never reaches the persisted claim or the rendered report', async () => {
+  const token = 'tok-do-not-print-9f2a';
+  const probe = makeProbe(token, async () => ({ status: 404 }));
+  const walked = await runWalk(
+    { claims: [statusClaim('c-14', 'https://stub.invalid/health')] },
+    {},
+    { runCommand: () => {}, probeUrl: probe },
+  );
+
+  expect(walked[0].verdict).toBe('FAIL');
+  expect(JSON.stringify(walked)).not.toContain(token);
+  expect(renderReport({ runbook: 'r.md', env: 'live', claims: walked, coverage: {} })).not.toContain(token);
 });

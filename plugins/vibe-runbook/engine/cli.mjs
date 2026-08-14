@@ -11,12 +11,18 @@ import { renderReport } from './report.mjs';
 
 const shell = (cmd) => execSync(cmd, { encoding: 'utf8' });
 
-// Never prints the credential, only whether one is present and what to ask for.
+const tokenVar = (env) => `VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN`;
+const tokenFor = (env) => process.env[tokenVar(env)];
+
+// Never prints the credential, only whether one is present and what to ask
+// for. The token itself is read separately, by the walk, and handed straight
+// to the probe -- it must not travel inside a result object that anything
+// downstream renders.
 const credentialFor = (env) => {
-  const token = process.env[`VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN`];
+  const token = tokenFor(env);
   return token
     ? { present: true }
-    : { present: false, ask: `set VIBE_RUNBOOK_${env.toUpperCase()}_TOKEN for environment "${env}"` };
+    : { present: false, ask: `set ${tokenVar(env)} for environment "${env}"` };
 };
 
 // Node's own fetch, not a shell-out (Fix 1, 2026-08-14 re-review #2). The
@@ -31,16 +37,25 @@ const credentialFor = (env) => {
 // keeps a dead or slow endpoint from ever hanging a walk the way the old
 // binding just did.
 //
-// This function itself is intentionally thin and is NOT covered by the
-// suite (2026-08-14 re-review #3): exercising it for real needs either a
-// live network call or a loopback socket, and this dev sandbox cannot even
-// route loopback between a spawned child process and a server its own
-// parent bound (confirmed directly while building the previous round's
-// fix). What the tests cover instead is runWalk below, via an injected
-// `probeUrl` stub -- the actual wiring that can break.
-async function fetchStatus(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  return res.status;
+// The credential is now carried, not just counted (Fix 8, 2026-08-14 final
+// review). preflight hard-stops a walk that has no VIBE_RUNBOOK_<ENV>_TOKEN,
+// and this function used to check that same variable was present and then
+// probe without it -- a turnstile opening onto an unauthenticated request. A
+// runbook claim like "the dashboard returns 200" got 401 back and produced a
+// FAIL against a runbook that was telling the truth, which is the same
+// false-FAIL class the walk protocol's "contract source beats the guess" rule
+// exists to prevent. It is a factory rather than a bare function so the header
+// construction is testable with an injected fetch and no network at all; the
+// real binding takes `fetch` by default. The token authenticates the request
+// and appears nowhere else -- not in evidence, not in the persisted claim, not
+// in the report (guide invariant 5).
+export function makeProbe(token, fetchImpl = fetch) {
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  return async function probe(url) {
+    // A 10s AbortSignal keeps a dead or slow endpoint from hanging a walk.
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10_000) });
+    return res.status;
+  };
 }
 
 function arg(name) {
@@ -76,7 +91,7 @@ function resolveUrl(claim, config) {
 // tests (2026-08-14 re-review #3): inject a stub `probeUrl`, assert that
 // what it returns drives the verdict, no network and no shell involved. The
 // CLI entry point below is the only caller that passes the real bindings
-// (shell, fetchStatus).
+// (shell, makeProbe(token)).
 export async function runWalk(state, config, { runCommand, probeUrl }) {
   // verifyStatus calls its httpProbe argument synchronously and expects a
   // return value back, not a Promise -- that contract in verify.mjs does
@@ -172,7 +187,10 @@ if (isMain) {
     }
 
     const config = loadConfig();
-    const walked = await runWalk(state, config, { runCommand: shell, probeUrl: fetchStatus });
+    const walked = await runWalk(state, config, {
+      runCommand: shell,
+      probeUrl: makeProbe(tokenFor(env)),
+    });
 
     writeFileSync(statePath, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
     console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
