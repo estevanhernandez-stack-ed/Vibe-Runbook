@@ -113,6 +113,140 @@ test('a BLOCKED status assertion missing a url gets a concrete next step', () =>
   expect(out).toMatch(/urls/);
 });
 
+// ---------------------------------------------------------------------------
+// Fixes 1, 2 and 3 (2026-08-14 final review). The report computed the most
+// valuable thing it has -- the observed value behind a FAIL -- and threw it
+// away, printing `FAIL: 2` and nothing else. It also said nothing whatsoever
+// about the 17 QUESTIONs and 2 HUMANs in a 22-claim walk, which is how a wall
+// of counts with three actionable lines under it becomes a tool installed once
+// and never opened again. Grouping the detail by shape closes the third defect
+// for free: a correctly-identified receipt stops being indistinguishable from
+// "could not classify", even though both still verdict QUESTION.
+// ---------------------------------------------------------------------------
+
+const walked = [
+  {
+    id: 'c-001', shape: 'pin', venue: 'executable', text: '**Revision `star-00049-j5r`**',
+    verdict: 'FAIL', evidence: 'runbook says star-00049-j5r, system says star-00099-NEW',
+    cost: { raw: 'no spend', count: 0 }, source: { file: 'star-smoke.md', line: 4 },
+  },
+  {
+    id: 'c-002', shape: 'pin', venue: 'executable', text: 'HEAD `0855bd2`',
+    verdict: 'PASS', evidence: '0855bd2 (confirmed)',
+    cost: { raw: 'no spend', count: 0 }, source: { file: 'star-smoke.md', line: 5 },
+  },
+  {
+    id: 'c-003', shape: 'status-assertion', venue: 'executable', text: 'Every new route answers 401 unauthenticated',
+    verdict: 'BLOCKED', evidence: 'no url for this status assertion',
+    cost: { raw: null, count: null }, source: { file: 'star-smoke.md', line: 32 },
+  },
+  {
+    id: 'c-004', shape: 'receipt', venue: 'executable', text: 'The chain walk over all 17 stored rooms',
+    verdict: 'QUESTION', evidence: null,
+    cost: { raw: null, count: null }, source: { file: 'star-smoke.md', line: 21 },
+  },
+  {
+    id: 'c-005', shape: 'human', venue: 'executable', text: 'Read it on screen, then Ctrl+P and read the PDF',
+    verdict: 'HUMAN', evidence: null,
+    cost: { raw: null, count: null }, source: { file: 'star-smoke.md', line: 88 },
+  },
+  {
+    id: 'c-006', shape: 'unknown', venue: 'executable', text: 'Your Liverpool export says 58',
+    verdict: 'QUESTION', evidence: null,
+    cost: { raw: null, count: null }, source: { file: 'star-smoke.md', line: 228 },
+  },
+];
+
+const walkedReport = () =>
+  renderReport({ runbook: 'star-smoke.md', env: 'live', claims: walked, coverage: { totalBlocks: 229, markedBlocks: 22, confidence: 'high' } });
+
+test('a FAIL prints the observed value, not just a count', () => {
+  const out = walkedReport();
+  expect(out).toContain('runbook says star-00049-j5r, system says star-00099-NEW');
+});
+
+test('a PASS prints its evidence too, so a green line can be checked rather than trusted', () => {
+  expect(walkedReport()).toContain('0855bd2 (confirmed)');
+});
+
+test('every claim reaches the page, including the ones nothing checked', () => {
+  const out = walkedReport();
+  for (const c of walked) expect(out).toContain(c.id);
+  expect(out).toContain('The chain walk over all 17 stored rooms');
+  expect(out).toContain('Read it on screen');
+  expect(out).toContain('Your Liverpool export says 58');
+});
+
+test('every claim carries its verdict and the line it came from', () => {
+  const out = walkedReport();
+  expect(out).toMatch(/c-001[^\n]*FAIL[^\n]*star-smoke\.md:4/);
+  expect(out).toMatch(/c-005[^\n]*HUMAN[^\n]*star-smoke\.md:88/);
+});
+
+// Fix 3: verdict.mjs maps receipt and unknown to the same QUESTION, correctly
+// -- neither is verifiable. The report is where they have to read differently,
+// or the plugin's signature classification is invisible on its only surface.
+test('a correctly-identified receipt reads as a receipt, not as "could not classify"', () => {
+  const out = walkedReport();
+  const receiptHeading = out.indexOf('### receipt');
+  const unknownHeading = out.indexOf('### unknown');
+  expect(receiptHeading).toBeGreaterThan(-1);
+  expect(unknownHeading).toBeGreaterThan(-1);
+  expect(receiptHeading).not.toBe(unknownHeading);
+
+  const receiptSection = out.slice(receiptHeading, unknownHeading);
+  expect(receiptSection).toContain('c-004');
+  expect(receiptSection).not.toContain('c-006');
+  expect(receiptSection).toMatch(/never failed/i);
+});
+
+test('the unknown group says it was recognized but not classifiable, not that it is fine', () => {
+  const out = walkedReport();
+  const unknownSection = out.slice(out.indexOf('### unknown'));
+  expect(unknownSection).toContain('c-006');
+  expect(unknownSection).toMatch(/no rule could classify/i);
+});
+
+test('the shape groups render in a fixed order, so two walks diff cleanly', () => {
+  const out = walkedReport();
+  const order = ['### pin', '### status-assertion', '### receipt', '### human', '### unknown'].map((h) => out.indexOf(h));
+  expect(order.every((i) => i > -1)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+});
+
+test('an empty shape group is omitted rather than printed as a zero', () => {
+  const out = renderReport({ runbook: 'r.md', env: 'live', claims: [walked[3]], coverage: {} });
+  expect(out).toContain('### receipt');
+  expect(out).not.toContain('### pin');
+  expect(out).not.toContain('### human');
+});
+
+// The summary is what the detail hangs off, not something the detail replaces.
+test('the counts and both coverage fractions survive the detail section', () => {
+  const out = walkedReport();
+  expect(out).toMatch(/read 22 of 229/);
+  expect(out).toMatch(/checked 2 of 6 enumerated/);
+  expect(out).toContain('- FAIL: 1');
+  expect(out).toContain('- QUESTION: 2');
+});
+
+// "A reader should be able to see what went unread, not just how much."
+test('the blocks nobody recognized are named as unchecked, not left as arithmetic', () => {
+  const out = walkedReport();
+  expect(out).toMatch(/207 blocks/);
+});
+
+test('the detail sits above the exits, so the report still ends at the decision', () => {
+  const out = walkedReport();
+  expect(out.indexOf('### pin')).toBeLessThan(out.indexOf('Needs your input to check'));
+});
+
+test('a claim with no source location renders without inventing one', () => {
+  const out = renderReport({ runbook: 'r.md', env: 'live', claims, coverage: {} });
+  expect(out).not.toContain('undefined');
+  expect(out).not.toContain('null:');
+});
+
 test('a genuine environment blocker is reported but not given a config fix it cannot use', () => {
   const blocked = [
     {
