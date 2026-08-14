@@ -23,9 +23,16 @@ test('nothing but a pin is remediated', () => {
   expect(pickTemplate({ shape: 'status-assertion', venue: 'executable' })).toBeNull();
 });
 
-test('value-to-command replaces the value with the invocation', () => {
+// Fix 1 (2026-08-14 review): a bare backticked invocation was indistinguishable
+// from a bare backticked value, so verifyPin re-scanned the rewrite as an
+// ordinary pin and compared the command *text* against the command's
+// *output* -- which can only match if a command echoes its own source. The
+// rewrite now emits a machine-recognizable `run:` marker so a remediated pin
+// can be told apart from a stale one on sight, by a human and by verify.mjs.
+test('value-to-command replaces the value with a run: marker plus the invocation', () => {
   const r = proposeRewrite(revisionPin, { command: 'gcloud run services describe star --format=...' });
   expect(r.template).toBe('value-to-command');
+  expect(r.after).toBe('Revision — run: `gcloud run services describe star --format=...`');
   expect(r.after).toContain('gcloud run services describe star');
   expect(r.after).not.toContain('star-00049-j5r');
 });

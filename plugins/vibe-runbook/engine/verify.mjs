@@ -13,22 +13,50 @@ export function expectedCode(text) {
   return m ? Number.parseInt(m[1], 10) : null;
 }
 
+// A `run:` marker immediately before a backticked span is the sole signal
+// that the span is an invocation rather than a value (Fix 1, 2026-08-14
+// review). Requiring the marker -- instead of "any backticked span with a
+// space" -- is also what stops an ordinary prose value like
+// `release candidate 3` from being resolved as a command to execute
+// (Fix 2, same review): once a real shell is wired in, running a user's
+// version string as a command is the failure mode that guards against.
+const SELF_ANSWERING_RE = /run:\s*`([^`]+)`/i;
+
 // Where a pin's command comes from, in order:
-//   1. The pin itself, if it has already been remediated. A value-to-command
-//      rewrite leaves the invocation in backticks, which makes a remediated
-//      runbook self-verifying -- the fix for staleness is also what makes the
-//      claim checkable next time.
+//   1. The pin itself, if it has already been remediated with a `run:`
+//      marker. See verifyPin below -- this case is self-answering and
+//      never reaches the comparison this function feeds.
 //   2. .vibe-runbook/config.json, keyed by the pin's label.
 //   3. Nothing, which is BLOCKED and points at the remediation.
 export function resolveCommand(claim, config = {}) {
   if (claim.command) return claim.command;
-  const inline = claim.text.match(/`([^`]*\s[^`]*)`/);
-  if (inline) return inline[1];
+  const selfAnswering = claim.text.match(SELF_ANSWERING_RE);
+  if (selfAnswering) return selfAnswering[1];
   const label = claim.text.split(/[:`]/)[0].trim().toLowerCase();
   return config.pins?.[label] ?? null;
 }
 
 export function verifyPin(claim, { runCommand, config }) {
+  // A remediated pin names its command instead of storing a value (Fix 1,
+  // 2026-08-14 review). There is no stored value left to drift, so this is
+  // not a comparison -- it is a pass by construction. The command still
+  // runs, so a broken invocation surfaces as BLOCKED rather than a free
+  // pass on a command that no longer works.
+  if (!claim.command) {
+    const selfAnswering = claim.text.match(SELF_ANSWERING_RE);
+    if (selfAnswering) {
+      try {
+        runCommand(selfAnswering[1]);
+      } catch (e) {
+        return { blocked: `command failed: ${e.message}` };
+      }
+      return {
+        ok: true,
+        evidence: 'self-answering: names the command instead of a value, so it cannot go stale',
+      };
+    }
+  }
+
   const command = resolveCommand(claim, config);
   if (!command) {
     return { blocked: 'no command for this pin; remediate it or add one to config.pins' };

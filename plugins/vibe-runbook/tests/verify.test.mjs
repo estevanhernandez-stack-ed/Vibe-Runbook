@@ -1,4 +1,4 @@
-import { pinValue, expectedCode, verifyPin, verifyStatus, probeWriteGuard } from '../engine/verify.mjs';
+import { pinValue, expectedCode, verifyPin, verifyStatus, probeWriteGuard, resolveCommand } from '../engine/verify.mjs';
 
 test('pulls the value out of a pin', () => {
   expect(pinValue('Revision `star-00049-j5r`')).toBe('star-00049-j5r');
@@ -37,12 +37,53 @@ test('a command comes from config when the pin is a bare value', () => {
   expect(verifyPin(claim, { runCommand: () => '216b917', config }).ok).toBe(true);
 });
 
-// A value-to-command rewrite leaves the invocation in backticks, so the fix
-// for staleness is also what makes the claim checkable without config.
-test('a remediated pin is self-verifying', () => {
-  const claim = { text: 'revision: `gcloud run services describe star --format=value(x)`' };
-  const r = verifyPin(claim, { runCommand: () => 'gcloud run services describe star --format=value(x)' });
+// A value-to-command rewrite marks itself with a `run:` marker immediately
+// before the backticked invocation. Fix 1 (2026-08-14 review): the earlier
+// shape (any backticked span with a space) had no marker at all, so
+// verifyPin fell into the value-comparison path and read the *command text*
+// as the expected value -- which can only match if a command echoes its own
+// source. A remediated pin named its command, not a value, so there is
+// nothing left to compare: it is self-answering and always PASSes, provided
+// the command itself still runs. The mock below returns real command
+// *output*, never the command string, so this cannot pass by echo.
+test('a remediated pin is self-answering: it PASSes without comparing a stored value', () => {
+  const claim = { text: 'Revision — run: `gcloud run services describe star --format=value(x)`' };
+  const r = verifyPin(claim, { runCommand: () => 'star-00077-abcd' });
   expect(r.ok).toBe(true);
+  expect(r.evidence).toMatch(/self-answering/i);
+  expect(r.evidence).toMatch(/cannot go stale/i);
+});
+
+test('a self-answering pin is BLOCKED, not falsely PASSed, if its command fails', () => {
+  const claim = { text: 'Revision — run: `gcloud run services describe star --format=value(x)`' };
+  const r = verifyPin(claim, { runCommand: () => { throw new Error('not authenticated'); } });
+  expect(r.blocked).toMatch(/not authenticated/);
+  expect(r.ok).toBeUndefined();
+});
+
+// Fix 2 (2026-08-14 review): resolveCommand used to treat *any* backticked
+// span containing a space as a command to run, which meant an ordinary
+// prose value like `release candidate 3` was resolved as an invocation.
+// Requiring the `run:` marker from Fix 1 closes that -- these two examples
+// must resolve to no command at all.
+test('an ordinary backticked value with a space is not mistaken for a command', () => {
+  expect(resolveCommand({ text: 'Tag `release candidate 3`' })).toBeNull();
+  expect(resolveCommand({ text: 'Version `2.1.0 (RC)`' })).toBeNull();
+});
+
+test('verifyPin never executes an ordinary backticked value as a shell command', () => {
+  let calls = 0;
+  const runCommand = () => {
+    calls += 1;
+    throw new Error('should never be invoked');
+  };
+  const tag = verifyPin({ text: 'Tag `release candidate 3`' }, { runCommand });
+  expect(tag.blocked).toMatch(/no command/i);
+  expect(calls).toBe(0);
+
+  const version = verifyPin({ text: 'Version `2.1.0 (RC)`' }, { runCommand });
+  expect(version.blocked).toMatch(/no command/i);
+  expect(calls).toBe(0);
 });
 
 test('a status assertion compares the observed code', () => {

@@ -14,10 +14,18 @@ export function proposeRewrite(claim, context = {}) {
   if (template === 'value-to-command') {
     if (!context.command) throw new Error('value-to-command needs a command; it is never invented');
     const label = claim.text.split(/[:`]/)[0].trim();
+    // Fix 1 (2026-08-14 review): a bare `label: \`command\`` was
+    // indistinguishable from a bare `label: \`value\`` on re-scan, so
+    // verify.mjs read the command text as an expected value and compared it
+    // against the command's output -- a comparison that can only pass if a
+    // command echoes its own source. The `run:` marker makes "this backtick
+    // span is an invocation, not a value" a fact of the text itself, which
+    // is what lets verifyPin recognize the pin as self-answering instead of
+    // re-deriving it heuristically.
     return {
       template,
       before: claim.text,
-      after: `${label}: \`${context.command}\``,
+      after: `${label} — run: \`${context.command}\``,
       confidence: 0.95,
     };
   }
