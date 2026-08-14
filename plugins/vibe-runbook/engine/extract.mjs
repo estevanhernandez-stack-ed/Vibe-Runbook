@@ -205,6 +205,30 @@ function isMarkerText(text) {
   return MARKERS.some((mk) => mk.re.test(text) || mk.bareRe.test(text));
 }
 
+// A checkable claim doesn't need a bold **Right:**/**Wrong:**/**Should:**
+// marker -- most runbooks state the same expectation as ordinary sentence
+// prose ("Database: Status should be "ok"", "**Max Attempts**: Should be 0")
+// and MARKERS, being line-anchored, never sees it. This is the mid-line
+// signal: any of these phrases appearing anywhere in the block, not at the
+// start of a line. Case-insensitive, word-bounded so "shoulder" doesn't
+// misfire on "should be".
+//
+// Scoped to list items only (see PROSE_MARKER handling below), on purpose:
+// unmarked.md's own prose reads "You should see a 200 come back" and "The
+// error rate panel should be flat" -- both contain a required phrase, in an
+// ordinary flowing paragraph a person wrote about what they will see with
+// their own eyes, not an enumerated checklist item. Matching those would
+// flip that fixture's zero-claims premise and start inferring a claim from
+// narration rather than reading one the author actually enumerated. Every
+// real positive control this widening targets (PriceScout, Reel-Battles,
+// STAR's own body prose) states its expectation as a list item; the
+// negative controls that must stay silent do not.
+const PROSE_EXPECTATION_RE = /\b(?:should be|should return|should show|should see|should read|must be|verify that|expected output)\b/i;
+
+function hasProseExpectation(text) {
+  return PROSE_EXPECTATION_RE.test(text);
+}
+
 // The physical line that contains a given offset into a paragraph's joined
 // text. `boundaries` is ordered by offset, one entry per physical line that
 // fed the paragraph; the last boundary at or before `offset` is the line
@@ -405,6 +429,23 @@ export function extractClaims(markdown, filePath) {
       }
       // A bare marker with nothing usable following it (end of document,
       // or another marker immediately after). Known, accepted limitation.
+      u += 1;
+      continue;
+    }
+
+    // Neither a line-anchored bold marker nor its bare form: the last
+    // chance for this unit to be a claim is a mid-line prose expectation,
+    // and only inside a list item -- see hasProseExpectation above for why
+    // flowing paragraph text doesn't qualify.
+    if (unit.isListItem && hasProseExpectation(text)) {
+      markedBlocks += 1;
+      n += 1;
+      claims.push({
+        id: `c-${String(n).padStart(3, '0')}`,
+        source: { file: filePath, line: unit.startLine },
+        text,
+        marker: 'prose',
+      });
       u += 1;
       continue;
     }
