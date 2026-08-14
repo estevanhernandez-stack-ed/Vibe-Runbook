@@ -1,0 +1,10 @@
+{
+  "name": "vibe-runbook",
+  "version": "0.1.0",
+  "description": "Your runbook says do X and you will see W. Nothing checks whether that is still true. vibe-runbook reads a runbook, classifies every claim in it, and walks the ones a machine can walk against an environment you name — read-only, and it never spends. Six verdicts: PASS, FAIL, BLOCKED, SPENDS, HUMAN, QUESTION. A past-tense coverage record is reported and never failed, because a doc that says it tested 17 rooms is not lying when there are now 12. Credential preflight hard-stops rather than quietly walking your local machine and calling it green. Every report states what fraction of the enumerated surface it actually checked. When a pin has gone stale it offers the fix: the command that answers it where the reader has a shell, or the list it was summarizing where they do not.",
+  "author": { "name": "626Labs LLC", "url": "https://github.com/estevanhernandez-stack-ed/Vibe-Runbook" },
+  "homepage": "https://github.com/estevanhernandez-stack-ed/Vibe-Runbook#readme",
+  "repository": "https://github.com/estevanhernandez-stack-ed/Vibe-Runbook",
+  "license": "MIT",
+  "keywords": ["vibe-runbook", "vibe-coding", "runbook", "documentation-testing", "claude-code-plugin", "626labs"]
+}
