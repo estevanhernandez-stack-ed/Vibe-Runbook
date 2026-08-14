@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0.0",
+  "app": "demo-app",
+  "adapter": "firebase-functions",
+  "baseUrls": { "prod": "https://demo.example.com", "dev": "http://localhost:5001" },
+  "discoveryRoute": "/api/_discovery",
+  "affordances": [
+    { "name": "health", "method": "GET", "path": "/api/health", "tier": "prod-safe" },
+    { "name": "seed", "method": "POST", "path": "/api/seed", "tier": "dev-only" }
+  ]
+}
