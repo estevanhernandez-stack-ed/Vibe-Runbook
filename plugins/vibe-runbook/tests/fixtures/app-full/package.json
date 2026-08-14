@@ -1,0 +1,8 @@
+{
+  "name": "demo-app",
+  "scripts": {
+    "start": "node server.mjs --port 3000",
+    "test": "jest",
+    "deploy": "./scripts/deploy.sh"
+  }
+}
