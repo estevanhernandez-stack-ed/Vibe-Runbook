@@ -9,6 +9,8 @@ Load skills/guide/SKILL.md. Read `<project>/.vibe-runbook/state/claims.json`,
 where `<project>` is the user's project root — never the plugin directory — and
 recommend:
 
+- No runbook found under the project root → `:author`. There is nothing to
+  check yet, so writing one is the only move that helps.
 - No claims cached → `:scan`
 - Claims cached, low confidence → offer markup guidance, not a walk
 - Claims cached, no walk → `:walk`, and ask which environment
