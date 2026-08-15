@@ -216,7 +216,14 @@ if (isMain) {
     });
 
     writeFileSync(dest, `${JSON.stringify({ ...state, env, claims: walked }, null, 2)}\n`, 'utf8');
-    console.log(renderReport({ runbook: state.runbook, env, claims: walked, coverage: state.coverage }));
+    // Review Fix 5 (coordinator round): scan.mjs caches `stubs` on every
+    // scan, and renderReport already knows how to render them ("N sections
+    // unwritten") -- but nothing here ever forwarded state.stubs into the
+    // call, so the param silently defaulted to [] and the line never
+    // appeared in real walk output, no matter how incomplete the runbook.
+    console.log(renderReport({
+      runbook: state.runbook, env, claims: walked, coverage: state.coverage, stubs: state.stubs,
+    }));
   } else if (command === 'remediate') {
     // The only mutating path in the plugin, and the posture is the point: the
     // default prints diffs and does nothing at all. `--apply` is the whole
@@ -292,10 +299,25 @@ if (isMain) {
       // no package.json, or unparseable — the directory name is a fine fallback
     }
 
-    const result = authorRunbook({
+    // Review Fix 3 (coordinator round): every other path in this file
+    // resolves against --project (see the comment at the top on
+    // projectRoot) -- `--out` was the one exception, passed through raw.
+    // `--project <target> --out docs/RUNBOOK.md` run from a different cwd
+    // therefore wrote nothing into the intended project and instead dropped
+    // a proposal beside an unrelated file under the operator's own cwd.
+    // Resolved the same way `scan` resolves `--runbook`: relative means
+    // relative to the project, absolute passes through untouched.
+    const outArg = arg('out');
+
+    // Review Fix 2 (coordinator round): authorRunbook is now async -- it has
+    // to pre-fetch every status-assertion url itself before verifying,
+    // because makeProbe's real binding is an async fetch and verifyStatus's
+    // contract is synchronous. Awaited here the same way `walk` above
+    // already awaits runWalk.
+    const result = await authorRunbook({
       projectRoot: root,
       appName,
-      out: arg('out'),
+      out: outArg ? resolvePath(root, outArg) : undefined,
       runCommand: shellIn(root),
       probeUrl: makeProbe(process.env[`VIBE_RUNBOOK_${String(arg('env') ?? '').toUpperCase()}_TOKEN`]),
     });

@@ -26,8 +26,11 @@ test('walk refuses to run without a named environment', () => {
 
 // Sets up a temp dir with a hand-built claims.json (bypassing scan) plus,
 // optionally, a .vibe-runbook/config.json, and runs `walk` with a stub
-// credential for the named environment.
-function walkDir({ claims, config, env = 'stub' }) {
+// credential for the named environment. `stubs`, when given, mimics what
+// scan.mjs actually caches on the state object (Fix 5, coordinator round
+// 2) -- omitted entirely when not passed, so existing callers see no change
+// to the state shape they were already writing.
+function walkDir({ claims, config, env = 'stub', stubs }) {
   const dir = mkdtempSync(join(tmpdir(), 'vrb-cli-walk-'));
   mkdirSync(join(dir, '.vibe-runbook', 'state'), { recursive: true });
   const state = {
@@ -35,6 +38,7 @@ function walkDir({ claims, config, env = 'stub' }) {
     runbook: 'runbook.md',
     coverage: { extracted: claims.length, markedBlocks: claims.length, totalBlocks: claims.length, confidence: 'high', guidance: null },
     claims,
+    ...(stubs ? { stubs } : {}),
   };
   writeFileSync(join(dir, '.vibe-runbook', 'state', 'claims.json'), JSON.stringify(state, null, 2));
   if (config) writeFileSync(join(dir, '.vibe-runbook', 'config.json'), JSON.stringify(config, null, 2));
@@ -390,6 +394,47 @@ test('walk reads state and config from --project, and writes the walked claims b
   expect(written.claims[0].verdict).toBe('PASS');
   expect(report).toContain('9.9.9');
   expect(existsSync(join(pluginDir, '.vibe-runbook'))).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Coordinator review, round 2 (author.mjs's :author command).
+// ---------------------------------------------------------------------------
+
+// Fix 3 (Important): `arg('out')` was passed straight through to
+// authorRunbook while every other path in this file resolves against
+// --project (scan's --runbook does exactly this a few tests up). Run from a
+// cwd that is NOT the project, with a relative --out, so a regression
+// reproduces exactly the way the reviewer found it: the file used to land
+// beside pluginDir instead of inside the target project.
+test('author resolves --out against --project, not the cwd the engine is invoked from', () => {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-author-proj-'));
+  writeFileSync(join(project, 'README.md'), '# bare\n', 'utf8');
+
+  const out = execFileSync('node', [cli, 'author', '--project', project, '--out', 'docs/RUNBOOK.md'], {
+    cwd: pluginDir,
+    encoding: 'utf8',
+  });
+
+  expect(existsSync(join(project, 'docs', 'RUNBOOK.md'))).toBe(true);
+  expect(existsSync(join(pluginDir, 'docs', 'RUNBOOK.md'))).toBe(false);
+  expect(out).toContain('wrote');
+});
+
+// Fix 5 (Important): scan.mjs caches `stubs` on every scan, and renderReport
+// already knows how to print "N sections unwritten" -- but the `walk`
+// branch never forwarded state.stubs into the renderReport call, so the
+// param silently defaulted to [] and the line never reached real walk
+// output no matter how incomplete the runbook actually was.
+test('walk forwards cached stubs into the report, so "N sections unwritten" reaches real output', () => {
+  const { report } = walkDir({
+    claims: [],
+    stubs: [
+      { question: 'Who gets paged when this degrades?', line: 12 },
+      { question: 'What does degraded-but-acceptable look like here?', line: 16 },
+    ],
+  });
+  expect(report).toMatch(/2 sections unwritten/);
+  expect(report).toContain('Who gets paged when this degrades?');
 });
 
 // ---------------------------------------------------------------------------
