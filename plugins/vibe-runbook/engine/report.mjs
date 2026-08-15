@@ -144,7 +144,7 @@ export function renderReport({ runbook, env, claims, coverage, stubs = [] }) {
   // coverage fractions, not folded into the six verdicts above.
   if (stubs.length > 0) {
     out.push(`**${stubs.length} sections unwritten**`, '');
-    for (const s of stubs) out.push(`- line ${s.line}: ${s.question}`);
+    for (const stub of stubs) out.push(`- line ${stub.line}: ${stub.question}`);
     out.push('');
   }
 
