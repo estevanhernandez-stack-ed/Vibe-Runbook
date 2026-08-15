@@ -8,9 +8,16 @@ export const SECTIONS = Object.freeze([
   { id: 'incident', title: 'When something is wrong' },
 ]);
 
-// Questions for sections nothing can derive. Each is a real question rather
-// than a placeholder, because the stub IS the ask.
+// Questions for sections nothing can derive. Every SECTIONS id needs an entry
+// here -- a section that comes back with zero drafts and no question is
+// completely silent, which is the exact failure this plugin exists to
+// refuse (review, 2026-08-14, Fix 1). Each is a real question rather than a
+// placeholder, because the stub IS the ask.
 const STUB_QUESTIONS = {
+  header: ['How do you pin the exact revision this runbook was walked against?'],
+  run: ['What command starts this service locally, and what does it need to run?'],
+  health: ['Which URL or command tells you the service is alive?'],
+  deploy: ['What is the command, or process, that deploys this service?'],
   incident: [
     'Who gets paged when this service degrades, and at what threshold?',
     'What does degraded-but-acceptable look like here?',
@@ -23,7 +30,14 @@ const STUB_QUESTIONS = {
 const pick = (facts, kind) => facts.filter((f) => f.kind === kind);
 
 export function compose({ facts, gaps }) {
-  const baseUrl = pick(facts, 'base-url').find((f) => /^https?:/.test(f.value))?.value ?? '';
+  // A repo's own remote is not a service base -- git.mjs legitimately emits
+  // a base-url fact for any https-shaped remote, and without this exclusion
+  // fact order silently decides whether the health check targets the app or
+  // GitHub (review, Fix 2). It stays a fact elsewhere (the header can still
+  // name the remote); it is just never a health-URL candidate.
+  const baseUrl = pick(facts, 'base-url')
+    .filter((f) => f.source !== 'git')
+    .find((f) => /^https?:/.test(f.value))?.value ?? '';
 
   const build = (id) => {
     const drafts = [];
@@ -64,7 +78,14 @@ export function compose({ facts, gaps }) {
 
     if (id === 'health') {
       for (const f of pick(facts, 'health-path')) {
-        const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}${f.value}` : f.value;
+        // An absolute path is already a full URL -- joining it onto a base
+        // doubles it into something unreachable. A relative path with no
+        // base to join against is not checkable either; rather than draft a
+        // status assertion nobody can answer, skip it and let the
+        // section-level stub below carry the question (review, Fix 4).
+        const isAbsolute = /^https?:/.test(f.value);
+        const url = isAbsolute ? f.value : baseUrl ? `${baseUrl.replace(/\/$/, '')}${f.value}` : null;
+        if (!url) continue;
         drafts.push({
           text: `**Right:** \`${f.value}\` answers 200.`,
           kind: 'status-assertion',
@@ -97,8 +118,15 @@ export function compose({ facts, gaps }) {
   };
 
   const sections = SECTIONS.map((s) => build(s.id));
-  // Every gap is stated somewhere in the document. A gatherer that could not
-  // run is a limitation the reader must see, not an omission.
-  if (gaps.length > 0) sections[0].notes.push(...gaps);
+  // Gaps are unstructured strings -- attributing one to a section would mean
+  // guessing which section it belongs to, and that guess ripples back
+  // through the gatherer contract. So they are not folded into header
+  // commentary (where a reader would mistake them for something about "what
+  // you are looking at"); they get their own titled place at the end, as a
+  // group, so the gathering-side limitations read as a group instead of
+  // being scattered or mistaken for prose (review, Fix 3).
+  if (gaps.length > 0) {
+    sections.push({ id: 'gaps', title: 'What could not be gathered', drafts: [], stubs: [], notes: [...gaps] });
+  }
   return sections;
 }
