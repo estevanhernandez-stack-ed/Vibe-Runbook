@@ -174,10 +174,6 @@ export async function authorRunbook(ctx) {
   const target = ctx.out ?? join(ctx.projectRoot, 'docs', 'RUNBOOK.md');
   mkdirSync(dirname(target), { recursive: true });
 
-  // Written before the document itself, so a generated runbook and the config
-  // that makes it walkable land together or not at all.
-  const configPath = mergeConfigUrls(ctx.projectRoot, urlsForEmittedClaims(markdown, target, sections));
-
   // Never clobber. A tool whose product is trustworthiness does not overwrite
   // a person's documentation because it believed it knew better.
   if (existsSync(target)) {
@@ -190,9 +186,40 @@ export async function authorRunbook(ctx) {
     // target: back it up before it's overwritten.
     if (existsSync(proposal)) backupFile(proposal);
     writeFileSync(proposal, markdown, 'utf8');
-    return { markdown, outPath: proposal, wrote: false, sections, evidence, configPath };
+    // NO CONFIG WRITE ON THIS PATH (Fix B, CRITICAL, 2026-08-14 re-review).
+    //
+    // mergeConfigUrls used to run above this branch, before the never-clobber
+    // decision was made. So on the common case -- a project that already has
+    // docs/RUNBOOK.md -- the ids were derived from the PROPOSAL while :scan
+    // and :walk read the operator's own document. The ids collide (both
+    // start at c-001) and the url lands on whatever claim happens to occupy
+    // that slot in a document it does not describe. Reproduced with no
+    // hand-merging at all, just :author then :scan then :walk:
+    //
+    //   - `c-002` **PASS** - `/api/internal/billing-drain` answers 200.
+    //     http://127.0.0.1:45897/api/health -> 200
+    //
+    // An operator's claim about a billing endpoint reported PASS on the
+    // strength of a probe of a health endpoint. A false PASS is the one
+    // failure this plugin cannot ship: every other thing it does -- the
+    // stubs, the visible BLOCKED notes, the coverage fractions, the
+    // never-clobber -- exists to make its reports trustworthy, and this made
+    // one lie in the direction of reassurance.
+    //
+    // A proposal the operator has not adopted must teach the walker nothing.
+    // When they merge it, the merged document's own ids are what a re-scan
+    // assigns, and the url is theirs to add or to get from a later :author
+    // run against a file that no longer exists.
+    return { markdown, outPath: proposal, wrote: false, sections, evidence, configPath: null };
   }
 
   writeFileSync(target, markdown, 'utf8');
+  // Written only now, and only here: the document this config describes is
+  // the document that was just written to `target`, and the ids come from
+  // exactly those bytes. Ordered after the write rather than before it so a
+  // config failure can only ever leave a runbook whose status assertion
+  // BLOCKs for want of a url -- never a config pointing at a document that
+  // does not exist.
+  const configPath = mergeConfigUrls(ctx.projectRoot, urlsForEmittedClaims(markdown, target, sections));
   return { markdown, outPath: target, wrote: true, sections, evidence, configPath };
 }

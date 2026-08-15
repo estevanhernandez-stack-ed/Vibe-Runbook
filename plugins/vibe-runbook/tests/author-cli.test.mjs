@@ -160,6 +160,112 @@ test('nothing probed means no config file is invented', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fix A (CRITICAL, 2026-08-14 re-review): --env gated whether a probe
+// happened, not where it went. An affordance whose path is already a full
+// url skipped the base-url join, so --env prod against a manifest carrying
+// an absolute localhost path sent the PROD bearer token to 127.0.0.1 over
+// plain HTTP. Asserted here at the level the token actually travels: the
+// probe is never called at all.
+// ---------------------------------------------------------------------------
+
+test('an absolute health path on another origin is never probed under a named env', async () => {
+  const d = scratch();
+  const manifestPath = join(d, 'agent-access.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  // prod is a real remote host; the affordance points at the operator's box.
+  manifest.affordances[0].path = 'http://127.0.0.1:8792/api/health';
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  let probes = 0;
+  const r = await authorRunbook({ ...ctx(d), probeUrl: async () => { probes += 1; return 200; } });
+
+  expect(probes).toBe(0);
+  const health = r.sections.find((s) => s.id === 'health');
+  expect(health.drafts).toHaveLength(0);
+  expect(health.stubs.length).toBeGreaterThan(0);
+  expect(existsSync(join(d, '.vibe-runbook', 'config.json'))).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Fix B (CRITICAL, 2026-08-14 re-review): the config write ran BEFORE the
+// never-clobber branch, so on any project that already has a runbook -- the
+// common case -- the ids came from the proposal while :scan and :walk read
+// the operator's own document. Both id sequences start at c-001, so the url
+// landed on whatever claim occupied that slot in a document it does not
+// describe, and the operator's claim about a billing endpoint was reported
+// PASS on the strength of a probe of a health endpoint.
+//
+// This is the reproduction with no hand-merging: :author, then scan and walk
+// the OPERATOR's file.
+// ---------------------------------------------------------------------------
+
+const operatorRunbook = [
+  '# Ops runbook',
+  '',
+  '> Written by a person, not by this tool.',
+  '> - HEAD — run: `git rev-parse --short HEAD`',
+  '',
+  '## Is it up',
+  '',
+  '**Right:** `/api/internal/billing-drain` answers 200.',
+  '',
+].join('\n');
+
+test('a proposal never teaches the walker anything about the document it does not describe', async () => {
+  const { runWalk } = await import('../engine/cli.mjs');
+  const { scanRunbook } = await import('../engine/scan.mjs');
+
+  const d = scratch();
+  mkdirSync(join(d, 'docs'), { recursive: true });
+  const operatorPath = join(d, 'docs', 'RUNBOOK.md');
+  writeFileSync(operatorPath, operatorRunbook, 'utf8');
+
+  const r = await authorRunbook(ctx(d));
+  expect(r.wrote).toBe(false);
+  expect(r.configPath).toBeNull();
+  expect(existsSync(join(d, '.vibe-runbook', 'config.json'))).toBe(false);
+
+  // The collision is real -- both documents put a status assertion at c-002 --
+  // which is exactly why deriving ids from one and walking the other lies.
+  const proposal = scanRunbook(readFileSync(r.outPath, 'utf8'), r.outPath);
+  const operator = scanRunbook(readFileSync(operatorPath, 'utf8'), operatorPath);
+  const proposalStatus = proposal.claims.find((c) => c.shape === 'status-assertion');
+  const operatorStatus = operator.claims.find((c) => c.shape === 'status-assertion');
+  expect(proposalStatus.id).toBe(operatorStatus.id);
+  expect(operatorStatus.text).toMatch(/billing-drain/);
+
+  const probed = [];
+  const walked = await runWalk(operator, {}, {
+    runCommand: () => 'abc1234',
+    probeUrl: async (u) => { probed.push(u); return 200; },
+  });
+
+  // Nothing of the operator's was probed, and no claim of theirs carries
+  // evidence borrowed from a document they never adopted.
+  expect(probed).toEqual([]);
+  const billing = walked.find((c) => c.id === operatorStatus.id);
+  expect(billing.verdict).toBe('BLOCKED');
+  expect(billing.verdict).not.toBe('PASS');
+  expect(billing.evidence ?? '').not.toMatch(/api\/health/);
+  expect(JSON.stringify(walked)).not.toMatch(/demo\.example\.com/);
+});
+
+// The other half of the same rule: when :author DID write the target, the
+// config it leaves behind describes that exact file.
+test('when the target was written, the config describes the file that was written', async () => {
+  const { scanRunbook } = await import('../engine/scan.mjs');
+  const d = scratch();
+
+  const r = await authorRunbook(ctx(d));
+  expect(r.wrote).toBe(true);
+
+  const config = JSON.parse(readFileSync(r.configPath, 'utf8'));
+  const scanned = scanRunbook(readFileSync(r.outPath, 'utf8'), r.outPath);
+  const status = scanned.claims.find((c) => c.shape === 'status-assertion');
+  expect(Object.keys(config.urls)).toEqual([status.id]);
+});
+
+// ---------------------------------------------------------------------------
 // Coordinator review, round 2. Five fixes; the three that live at the
 // authorRunbook level get their regression tests here. Fix 3 (--out
 // resolved against --project) and Fix 5 (walk forwards state.stubs) are
