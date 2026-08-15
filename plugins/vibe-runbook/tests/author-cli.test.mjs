@@ -1,13 +1,18 @@
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, appendFileSync, readFileSync, existsSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authorRunbook } from '../engine/author.mjs';
 
 const fullFixture = fileURLToPath(new URL('./fixtures/app-full/', import.meta.url));
+// `env` is load-bearing now, not decoration: without it nothing is probed at
+// all and the health section composes to a stub (Fix 1, 2026-08-14
+// whole-branch review). 'prod' is a key the fixture's agent-access.json
+// actually carries.
 const ctx = (root) => ({
   projectRoot: root,
   appName: 'demo-app',
+  env: 'prod',
   runCommand: () => 'abc1234',
   probeUrl: () => 200,
 });
@@ -39,19 +44,36 @@ test('NEVER overwrites an existing runbook', async () => {
   expect(r.outPath).not.toBe(join(d, 'docs', 'RUNBOOK.md'));
 });
 
-test('no .env value ever reaches the emitted document', async () => {
+// Was a tripwire pointed at the wrong file (2026-08-14 whole-branch review):
+// it wrote a `.env` no gatherer opens, then asserted toContain('API_KEY') --
+// which passed off the fixture's own .env.example, not off the file under
+// test. The real invariant has two halves and both are asserted here: the
+// file that IS read yields key names and never values, and a `.env` is not a
+// source at all, key or value.
+test('no .env.example value ever reaches the emitted document, and .env is not read at all', async () => {
   const d = scratch();
-  writeFileSync(join(d, '.env'), 'API_KEY=SENTINEL-DO-NOT-EMIT\n', 'utf8');
+  appendFileSync(join(d, '.env.example'), 'SENTINEL_KEY=SENTINEL-VALUE-DO-NOT-EMIT\n', 'utf8');
+  writeFileSync(join(d, '.env'), 'PRIVATE_ONLY_KEY=ALSO-DO-NOT-EMIT\n', 'utf8');
+
   const r = await authorRunbook(ctx(d));
-  expect(r.markdown).not.toContain('SENTINEL-DO-NOT-EMIT');
-  expect(r.markdown).toContain('API_KEY');
+
+  expect(r.markdown).toContain('SENTINEL_KEY');
+  expect(r.markdown).not.toContain('SENTINEL-VALUE-DO-NOT-EMIT');
+  expect(r.markdown).not.toContain('PRIVATE_ONLY_KEY');
+  expect(r.markdown).not.toContain('ALSO-DO-NOT-EMIT');
 });
 
-test('the generated runbook passes its own walk at birth', async () => {
+// Widened (2026-08-14 whole-branch review): filtering on FAIL alone let a
+// BLOCKED-at-birth claim through, which is the exact case that then renders
+// as a bare confident assertion. Any non-PASS verdict is a defect in the
+// generator on a fixture this complete. `null` is not a verdict -- a step
+// with verify.type 'none' was never checked and never claimed to be.
+test('the generated runbook passes its own walk at birth, on every checked claim', async () => {
   const d = scratch();
   const r = await authorRunbook(ctx(d));
-  const failed = r.sections.flatMap((s) => s.drafts).filter((x) => x.verdict === 'FAIL');
-  expect(failed).toEqual([]);
+  const checked = r.sections.flatMap((s) => s.drafts).filter((x) => x.verdict !== null);
+  expect(checked.length).toBeGreaterThan(0);
+  expect(checked.filter((x) => x.verdict !== 'PASS')).toEqual([]);
 });
 
 test('an app with nothing to gather still produces an honest document', async () => {
@@ -60,6 +82,81 @@ test('an app with nothing to gather still produces an honest document', async ()
   const r = await authorRunbook(ctx(d));
   expect(r.markdown).toMatch(/Unwritten:/);
   expect(r.markdown).toMatch(/Not gathered/);
+});
+
+// ---------------------------------------------------------------------------
+// Fix 1 + Fix 2 (2026-08-14 whole-branch review). They compose: once the env
+// is explicit, :author knows exactly which url it probed, so it can record
+// that url where the next walk will look for it.
+// ---------------------------------------------------------------------------
+
+// Reproduced with live listeners before the fix: no --env, two base urls,
+// no token -- and :author hit PROD, unauthenticated, then wrote
+// "**Right:** /health answers 200." down as a PASS.
+test('with no env named, nothing is probed and the health section is a question', async () => {
+  const d = scratch();
+  let probes = 0;
+  const r = await authorRunbook({ ...ctx(d), env: undefined, probeUrl: async () => { probes += 1; return 200; } });
+
+  expect(probes).toBe(0);
+  const health = r.sections.find((s) => s.id === 'health');
+  expect(health.drafts).toHaveLength(0);
+  expect(health.stubs.length).toBeGreaterThan(0);
+  expect(r.markdown).not.toMatch(/answers 200/);
+});
+
+test('the named env decides which host is probed, not the manifest ordering', async () => {
+  const d = scratch();
+  const probed = [];
+  await authorRunbook({ ...ctx(d), env: 'dev', probeUrl: async (u) => { probed.push(u); return 200; } });
+  expect(probed).toEqual(['http://localhost:5001/api/health']);
+});
+
+// The whole composition story -- author writes it, walk keeps it true -- was
+// false for the only non-pin assertion :author can produce: compose put the
+// full url in verify.url, only the bare path reached the page, nothing ever
+// populates claim.url, and the walk therefore reported
+// "BLOCKED - no url for this status assertion" forever, on a document whose
+// generator had the url in hand.
+test('the url it probed is recorded in config.json under the id a later scan will assign', async () => {
+  const d = scratch();
+  const r = await authorRunbook(ctx(d));
+
+  const config = JSON.parse(readFileSync(join(d, '.vibe-runbook', 'config.json'), 'utf8'));
+  const ids = Object.keys(config.urls ?? {});
+  expect(ids.length).toBe(1);
+  expect(config.urls[ids[0]]).toBe('https://demo.example.com/api/health');
+
+  // The id is not asserted literally -- it has to be the one scan actually
+  // assigns to this claim, which is the only thing that makes the entry
+  // resolvable on the next walk.
+  const { scanRunbook } = await import('../engine/scan.mjs');
+  const scanned = scanRunbook(readFileSync(r.outPath, 'utf8'), r.outPath);
+  const status = scanned.claims.find((c) => c.shape === 'status-assertion');
+  expect(status).toBeDefined();
+  expect(ids).toContain(status.id);
+});
+
+test('an existing config is merged into, never clobbered', async () => {
+  const d = scratch();
+  mkdirSync(join(d, '.vibe-runbook'), { recursive: true });
+  writeFileSync(
+    join(d, '.vibe-runbook', 'config.json'),
+    JSON.stringify({ pins: { revision: 'gcloud run services describe demo' }, urls: { 'c-999': 'https://kept.example.com' } }, null, 2),
+  );
+
+  await authorRunbook(ctx(d));
+
+  const config = JSON.parse(readFileSync(join(d, '.vibe-runbook', 'config.json'), 'utf8'));
+  expect(config.pins.revision).toBe('gcloud run services describe demo');
+  expect(config.urls['c-999']).toBe('https://kept.example.com');
+  expect(Object.values(config.urls)).toContain('https://demo.example.com/api/health');
+});
+
+test('nothing probed means no config file is invented', async () => {
+  const d = scratch();
+  await authorRunbook({ ...ctx(d), env: undefined });
+  expect(existsSync(join(d, '.vibe-runbook', 'config.json'))).toBe(false);
 });
 
 // ---------------------------------------------------------------------------

@@ -60,9 +60,23 @@ const credentialFor = (env) => {
 export function makeProbe(token, fetchImpl = fetch) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   return async function probe(url) {
-    // A 10s AbortSignal keeps a dead or slow endpoint from hanging a walk.
-    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10_000) });
-    return res.status;
+    try {
+      // A 10s AbortSignal keeps a dead or slow endpoint from hanging a walk.
+      const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10_000) });
+      return res.status;
+    } catch (e) {
+      // Node reports every transport failure as the bare string "fetch
+      // failed" and hides the reason on e.cause. That message is what a
+      // BLOCKED verdict renders, in a report and now on the page of a
+      // generated runbook -- "could not be verified: probe failed: fetch
+      // failed" names no reason at all, which is a visible note that tells
+      // the reader nothing (found while re-running :author after the
+      // 2026-08-14 whole-branch review, on a deliberately-unreachable
+      // host). The cause is a system error -- ECONNREFUSED, ENOTFOUND, a
+      // timeout -- never a credential.
+      const cause = e?.cause?.message ?? e?.cause?.code;
+      throw cause ? new Error(`${e.message}: ${cause}`) : e;
+    }
   };
 }
 
@@ -309,6 +323,32 @@ if (isMain) {
     // relative to the project, absolute passes through untouched.
     const outArg = arg('out');
 
+    // Fix 1 (2026-08-14 whole-branch review), reproduced with live
+    // listeners before it was fixed: this branch never called preflight --
+    // the walk branch was the only caller -- so `:author` with two base
+    // urls and no `--env` and no token probed PROD, unauthenticated, and
+    // wrote "answers 200" down as a PASS. And because the token was chosen
+    // from `--env` while the url was chosen as the first https base-url in
+    // FILE ORDER, `--env prod` against a manifest listing `local` first
+    // sent a production bearer token to http://127.0.0.1 in the clear.
+    //
+    // `--env` is now required before anything is probed, and it names the
+    // base url rather than merely selecting a token (see compose.mjs).
+    // Omitted, nothing is probed at all and the health section emits its
+    // stub question, which is the honest outcome and already what every
+    // project without a manifest gets. Named, the credential turnstile is
+    // the walk's, unchanged: guide invariant 2, hard stop with the exact
+    // ask, never a fallback to somewhere greener.
+    const env = arg('env');
+    if (env) {
+      const pre = preflight({ env, credentialCheck: () => credentialFor(env) });
+      if (!pre.ok) {
+        console.error(`BLOCKED: ${pre.blocked}`);
+        console.error(`ask: ${pre.ask}`);
+        process.exit(1);
+      }
+    }
+
     // Review Fix 2 (coordinator round): authorRunbook is now async -- it has
     // to pre-fetch every status-assertion url itself before verifying,
     // because makeProbe's real binding is an async fetch and verifyStatus's
@@ -317,14 +357,18 @@ if (isMain) {
     const result = await authorRunbook({
       projectRoot: root,
       appName,
+      env,
       out: outArg ? resolvePath(root, outArg) : undefined,
       runCommand: shellIn(root),
-      probeUrl: makeProbe(process.env[`VIBE_RUNBOOK_${String(arg('env') ?? '').toUpperCase()}_TOKEN`]),
+      probeUrl: makeProbe(env ? tokenFor(env) : undefined),
     });
 
     console.log(`gathered from: ${result.evidence.ran.join(', ') || 'nothing'}`);
     if (result.evidence.skipped.length > 0) {
       console.log(`skipped: ${result.evidence.skipped.join(', ')}`);
+    }
+    if (!env) {
+      console.log('no --env named, so nothing was probed; the health section is left as a question.');
     }
     const stubCount = result.sections.reduce((n, s) => n + s.stubs.length, 0);
     if (result.wrote) {
@@ -333,11 +377,15 @@ if (isMain) {
       console.log(`a runbook already exists and was NOT overwritten.`);
       console.log(`proposal written to ${result.outPath} — read the diff and merge what you want.`);
     }
+    if (result.configPath) {
+      console.log(`recorded the url it checked in ${result.configPath}, so the next walk checks the same one.`);
+    }
     console.log(`${stubCount} sections are unwritten and need you.`);
   } else {
     console.error(
       'usage: vibe-runbook <scan|walk|remediate|author> [--runbook <path>] [--env <name>] ' +
-      '[--project <path>] [--apply] [--out <path>]'
+      '[--project <path>] [--apply] [--out <path>]\n' +
+      'author: --env is optional and gates every live probe; without it the health section is a question.'
     );
     process.exit(1);
   }

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, cpSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -297,6 +297,26 @@ test('the probe carries the credential as a bearer header', async () => {
   expect(seen.init.headers.Authorization).toBe('Bearer secret-token');
 });
 
+// Found re-running :author after the 2026-08-14 whole-branch review: every
+// transport failure came back as the bare string "fetch failed", so a
+// BLOCKED claim rendered "could not be verified at generation time: probe
+// failed: fetch failed" -- a note that names no reason. Now that the note is
+// visible on the page (Fix 3), an uninformative one is a worse defect than
+// it was when it lived in an HTML comment.
+test('a transport failure names its cause instead of the bare string "fetch failed"', async () => {
+  const bare = Object.assign(new Error('fetch failed'), {
+    cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }),
+  });
+  const probe = makeProbe(undefined, async () => { throw bare; });
+
+  await expect(probe('http://127.0.0.1:1/health')).rejects.toThrow(/ECONNREFUSED/);
+});
+
+test('an error with no cause is rethrown unchanged, not wrapped in "undefined"', async () => {
+  const probe = makeProbe(undefined, async () => { throw new Error('TimeoutError'); });
+  await expect(probe('https://stub.invalid/health')).rejects.toThrow(/^TimeoutError$/);
+});
+
 test('no token means no invented header, rather than the string "Bearer undefined"', async () => {
   let seen = null;
   const probe = makeProbe(undefined, async (url, init) => {
@@ -418,6 +438,110 @@ test('author resolves --out against --project, not the cwd the engine is invoked
   expect(existsSync(join(project, 'docs', 'RUNBOOK.md'))).toBe(true);
   expect(existsSync(join(pluginDir, 'docs', 'RUNBOOK.md'))).toBe(false);
   expect(out).toContain('wrote');
+});
+
+// ---------------------------------------------------------------------------
+// Fix 1 + Fix 2 (2026-08-14 whole-branch review), at the wiring level. The
+// author branch never called preflight -- the walk branch was its only
+// caller -- so the guarantee sold in plugin.json and written down as guide
+// invariant 2 ("credential preflight hard-stops rather than quietly walking
+// your local machine and calling it green") was true of one of the two
+// commands that probe.
+// ---------------------------------------------------------------------------
+
+const authorFixture = fileURLToPath(new URL('./fixtures/app-full/', import.meta.url));
+
+// These tests drive the real CLI in a subprocess, so the real probe binding
+// (makeProbe -> fetch) is live and there is no seam to inject a stub
+// through. The manifest's base urls are therefore rewritten to a loopback
+// port nothing listens on: a refused connection, no DNS lookup, no packet
+// that leaves the machine, and makeProbe's 10s AbortSignal as the backstop.
+// What is under test here is the CLI's own wiring -- preflight, env
+// selection, the config write -- and the probe's verdict is incidental to
+// every assertion below.
+const LOOPBACK = 'http://127.0.0.1:1';
+
+function authorProject() {
+  const project = mkdtempSync(join(tmpdir(), 'vrb-author-env-'));
+  cpSync(authorFixture, project, { recursive: true });
+  const manifestPath = join(project, 'agent-access.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.baseUrls = { prod: LOOPBACK, dev: `${LOOPBACK}0` };
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  return project;
+}
+
+test('author with a named env and no credential hard-stops, and writes nothing', () => {
+  const project = authorProject();
+  let err;
+  try {
+    execFileSync('node', [cli, 'author', '--project', project, '--env', 'prod'], {
+      cwd: pluginDir, encoding: 'utf8', stdio: 'pipe',
+      env: { ...process.env, VIBE_RUNBOOK_PROD_TOKEN: '' },
+    });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeDefined();
+  expect(String(err.stderr)).toMatch(/BLOCKED: credential unavailable for environment "prod"/);
+  expect(String(err.stderr)).toMatch(/VIBE_RUNBOOK_PROD_TOKEN/);
+  expect(existsSync(join(project, 'docs', 'RUNBOOK.md'))).toBe(false);
+});
+
+test('author with no env named writes the document, probes nothing, and says so', () => {
+  const project = authorProject();
+  const out = execFileSync('node', [cli, 'author', '--project', project], { cwd: pluginDir, encoding: 'utf8' });
+
+  expect(out).toMatch(/no --env named/);
+  const doc = readFileSync(join(project, 'docs', 'RUNBOOK.md'), 'utf8');
+  expect(doc).not.toMatch(/answers 200/);
+  expect(doc).toMatch(/Unwritten:.*alive/);
+  expect(existsSync(join(project, '.vibe-runbook', 'config.json'))).toBe(false);
+});
+
+// The composition the plugin sells, end to end and with no network: author
+// writes it, scan reads it back, walk checks the SAME url the generator
+// checked. Before Fix 2 this ended in
+// "BLOCKED - no url for this status assertion" on every generated document,
+// forever, and the report asked the user to supply a url the generator had
+// in hand at write time.
+test('author -> scan -> walk checks the url the generator checked, instead of BLOCKING on it', async () => {
+  const project = authorProject();
+  execFileSync('node', [cli, 'author', '--project', project, '--env', 'prod'], {
+    cwd: pluginDir, encoding: 'utf8',
+    env: { ...process.env, VIBE_RUNBOOK_PROD_TOKEN: 'stub-token' },
+  });
+  execFileSync('node', [cli, 'scan', '--runbook', 'docs/RUNBOOK.md', '--project', project], { cwd: pluginDir });
+
+  const state = JSON.parse(readFileSync(join(project, '.vibe-runbook', 'state', 'claims.json'), 'utf8'));
+  const config = JSON.parse(readFileSync(join(project, '.vibe-runbook', 'config.json'), 'utf8'));
+
+  const probed = [];
+  const walked = await runWalk(state, config, {
+    runCommand: () => 'abc1234',
+    probeUrl: async (url) => { probed.push(url); return 200; },
+  });
+
+  expect(probed).toEqual([`${LOOPBACK}/api/health`]);
+  const status = walked.find((c) => c.shape === 'status-assertion');
+  expect(status.verdict).toBe('PASS');
+  expect(status.evidence ?? '').not.toMatch(/no url for this status assertion/i);
+});
+
+// The author path probes over the real network binding, so it needs the same
+// never-print-a-secret discipline the walk has. The token authenticates the
+// request and reaches neither the document nor the config written beside it.
+test('the author credential never reaches the generated document or its config', () => {
+  const project = authorProject();
+  const token = 'tok-author-do-not-print-4c1e';
+  const out = execFileSync('node', [cli, 'author', '--project', project, '--env', 'prod'], {
+    cwd: pluginDir, encoding: 'utf8',
+    env: { ...process.env, VIBE_RUNBOOK_PROD_TOKEN: token },
+  });
+
+  expect(out).not.toContain(token);
+  expect(readFileSync(join(project, 'docs', 'RUNBOOK.md'), 'utf8')).not.toContain(token);
+  expect(readFileSync(join(project, '.vibe-runbook', 'config.json'), 'utf8')).not.toContain(token);
 });
 
 // Fix 5 (Important): scan.mjs caches `stubs` on every scan, and renderReport

@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { verifyPin, verifyStatus } from './verify.mjs';
 import { assignVerdict } from './verdict.mjs';
@@ -8,6 +8,7 @@ import { gitGatherer } from './gather/git.mjs';
 import { manifestGatherer } from './gather/manifest.mjs';
 import { compose } from './compose.mjs';
 import { emitRunbook } from './emit.mjs';
+import { scanRunbook } from './scan.mjs';
 import { backupFile } from './backup.mjs';
 
 const NO_COST = { raw: null, count: null };
@@ -24,15 +25,17 @@ export function verifyDrafts(sections, { runCommand, probeUrl }) {
 
       const claim = { shape: draft.kind === 'pin' ? 'pin' : 'status-assertion', text: draft.text, cost: NO_COST };
 
-      // Controller fix: do not forward draft.verify.command as claim.command.
-      // verifyPin only takes its self-answering fast path (run the command
-      // named in the text, pass if it doesn't throw) when claim.command is
-      // falsy -- passing the command through here forced the other branch,
-      // where pinValue(claim.text) pulled the literal command string out of
-      // the backticks as the "expected value" and compared it against
-      // runCommand's actual output, which can never match. A birth-time pin
-      // is exactly the self-answering shape compose.mjs already writes, so
-      // let SELF_ANSWERING_RE in verify.mjs find it in claim.text itself.
+      // The claim carries no `command`, on purpose. verifyPin only takes its
+      // self-answering fast path (run the command named in the text, pass if
+      // it doesn't throw) when claim.command is falsy; setting it forces the
+      // other branch, where pinValue(claim.text) pulls the literal command
+      // string out of the backticks as the "expected value" and compares it
+      // against runCommand's actual output, which can never match. A
+      // birth-time pin is exactly the self-answering shape compose.mjs
+      // writes, so SELF_ANSWERING_RE in verify.mjs finds it in claim.text.
+      // compose.mjs no longer carries a `verify.command` field at all
+      // (2026-08-14 whole-branch review) -- a field whose only documentation
+      // was "do not read this" is an invitation to wire it back up.
       const result =
         draft.verify.type === 'pin'
           ? verifyPin(claim, { runCommand })
@@ -63,6 +66,62 @@ function proposalPath(target) {
     : `${target}.vibe-runbook-proposal.md`;
 }
 
+// Fix 2 (2026-08-14 whole-branch review). The url was known at generation
+// and thrown away: compose put it in `verify.url`, only the bare path
+// reached the rendered text, and nothing in the scan/classify path ever
+// populates `claim.url`. So author -> scan -> walk on a generated document
+// gave `BLOCKED - no url for this status assertion` on the only non-pin
+// assertion :author can produce, and the report then asked the user to add
+// a url to config.urls that the generator already had. Author writes it,
+// walk keeps it true -- that story does not survive a permanently BLOCKED
+// claim.
+//
+// config.urls is keyed by claim id, and claim ids are assigned by scan, so
+// the ids are derived the one way that cannot drift from what a later
+// `:scan` will produce: by scanning the emitted markdown here and matching
+// each status draft to the claim extracted from it. The marker strips
+// `**Right:** ` off the front, which is why this is a containment test
+// rather than equality.
+function urlsForEmittedClaims(markdown, target, sections) {
+  const drafted = sections
+    .flatMap((s) => s.drafts)
+    .filter((d) => d.verify?.type === 'status' && d.verify.url);
+  if (drafted.length === 0) return {};
+
+  const urls = {};
+  const { claims } = scanRunbook(markdown, target);
+  for (const d of drafted) {
+    const claim = claims.find((c) => c.shape === 'status-assertion' && d.text.includes(c.text));
+    if (claim) urls[claim.id] = d.verify.url;
+  }
+  return urls;
+}
+
+// Merged, never clobbered. .vibe-runbook/config.json is a user-owned file --
+// it carries their config.pins entries and any url they corrected by hand --
+// so the generated entries are folded in and everything else is left exactly
+// as it was. A malformed existing config is left alone entirely rather than
+// overwritten with a guess about what it meant.
+function mergeConfigUrls(projectRoot, urls) {
+  if (Object.keys(urls).length === 0) return null;
+  const dir = join(projectRoot, '.vibe-runbook');
+  const configPath = join(dir, 'config.json');
+
+  let existing = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  const merged = { ...existing, urls: { ...(existing.urls ?? {}), ...urls } };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  return configPath;
+}
+
 // The only mutating path this half of the plugin has, and the posture is the
 // same one remediate.mjs already committed to: gather, compose, and verify
 // before a single byte is written, and never overwrite what is already
@@ -80,7 +139,11 @@ function proposalPath(target) {
 // verifyDrafts that instead. verifyDrafts and verifyStatus stay untouched.
 export async function authorRunbook(ctx) {
   const evidence = runGatherers(GATHERERS, ctx);
-  const composed = compose(evidence);
+  // `ctx.env` is what decides whether anything gets probed at all, and which
+  // host gets probed if so (Fix 1, 2026-08-14 whole-branch review). Undefined
+  // means the health section composes to its stub question and no url is ever
+  // built, so ctx.probeUrl is never reached.
+  const composed = compose(evidence, { env: ctx.env });
 
   const probeResults = new Map();
   for (const section of composed) {
@@ -111,6 +174,10 @@ export async function authorRunbook(ctx) {
   const target = ctx.out ?? join(ctx.projectRoot, 'docs', 'RUNBOOK.md');
   mkdirSync(dirname(target), { recursive: true });
 
+  // Written before the document itself, so a generated runbook and the config
+  // that makes it walkable land together or not at all.
+  const configPath = mergeConfigUrls(ctx.projectRoot, urlsForEmittedClaims(markdown, target, sections));
+
   // Never clobber. A tool whose product is trustworthiness does not overwrite
   // a person's documentation because it believed it knew better.
   if (existsSync(target)) {
@@ -123,9 +190,9 @@ export async function authorRunbook(ctx) {
     // target: back it up before it's overwritten.
     if (existsSync(proposal)) backupFile(proposal);
     writeFileSync(proposal, markdown, 'utf8');
-    return { markdown, outPath: proposal, wrote: false, sections, evidence };
+    return { markdown, outPath: proposal, wrote: false, sections, evidence, configPath };
   }
 
   writeFileSync(target, markdown, 'utf8');
-  return { markdown, outPath: target, wrote: true, sections, evidence };
+  return { markdown, outPath: target, wrote: true, sections, evidence, configPath };
 }

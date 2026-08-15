@@ -29,32 +29,54 @@ const STUB_QUESTIONS = {
 
 const pick = (facts, kind) => facts.filter((f) => f.kind === kind);
 
-export function compose({ facts, gaps }) {
+// Fix 1 (2026-08-14 whole-branch review), and the reason `env` is now a
+// parameter rather than an inference. The base url used to be "the first
+// non-git https base-url in fact order", which is file order out of a
+// manifest -- so `--env prod` against a manifest listing `local` first sent
+// the production bearer token to http://127.0.0.1 over plain HTTP, and no
+// `--env` at all probed whatever host happened to be listed first, with no
+// credential, and wrote the 200 down as a PASS.
+//
+// Two rules, both absolute:
+//   - No env named, no probe. The health section falls to its stub question,
+//     which is the honest outcome and already the outcome on every project
+//     without a manifest.
+//   - The env NAMES the base url. `--env prod` uses baseUrls.prod and
+//     nothing else. A missing key is a stub, never a fallback to another
+//     host -- falling back is how a "green" run against the wrong target
+//     gets recorded as evidence.
+function resolveBaseUrl(facts, env) {
+  if (!env) return '';
   // A repo's own remote is not a service base -- git.mjs legitimately emits
   // a base-url fact for any https-shaped remote, and without this exclusion
-  // fact order silently decides whether the health check targets the app or
+  // fact order silently decided whether the health check targeted the app or
   // GitHub (review, Fix 2). It stays a fact elsewhere (the header can still
   // name the remote); it is just never a health-URL candidate.
-  const baseUrl = pick(facts, 'base-url')
+  const named = pick(facts, 'base-url')
     .filter((f) => f.source !== 'git')
-    .find((f) => /^https?:/.test(f.value))?.value ?? '';
+    .find((f) => f.key === env);
+  return named && /^https?:/.test(named.value) ? named.value : '';
+}
+
+export function compose({ facts, gaps }, { env } = {}) {
+  const baseUrl = resolveBaseUrl(facts, env);
 
   const build = (id) => {
     const drafts = [];
 
     if (id === 'header') {
+      // `verify.command` is deliberately absent (2026-08-14 whole-branch
+      // review). author.mjs must not forward a command onto the claim it
+      // builds -- doing so pushes verifyPin off its self-answering fast path
+      // and into a comparison that can never match. The field existed, was
+      // read by nothing, and carried a comment saying not to use it, which
+      // is an invitation to wire it back up. The text names the command; that
+      // is the whole design.
       for (const f of pick(facts, 'head-command')) {
         drafts.push({
           text: `HEAD — run: \`${f.value}\``,
           kind: 'pin',
-          verify: { type: 'pin', command: f.value },
-        });
-      }
-      for (const f of pick(facts, 'revision-command')) {
-        drafts.push({
-          text: `revision — run: \`${f.value}\``,
-          kind: 'pin',
-          verify: { type: 'pin', command: f.value },
+          verify: { type: 'pin' },
         });
       }
     }
@@ -76,7 +98,11 @@ export function compose({ facts, gaps }) {
       }
     }
 
-    if (id === 'health') {
+    // `env` gates the whole section, not just the base-url join: an absolute
+    // health-path is a full URL and would otherwise be probed with no
+    // environment named and no credential preflight behind it. "No env, no
+    // probe" has to mean every probe, or it means nothing.
+    if (id === 'health' && env) {
       for (const f of pick(facts, 'health-path')) {
         // An absolute path is already a full URL -- joining it onto a base
         // doubles it into something unreachable. A relative path with no

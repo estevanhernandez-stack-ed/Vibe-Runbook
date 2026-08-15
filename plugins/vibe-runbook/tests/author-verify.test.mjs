@@ -3,7 +3,9 @@ import { verifyDrafts } from '../engine/author.mjs';
 const sections = [
   {
     id: 'header', title: 'h', notes: [], stubs: [],
-    drafts: [{ text: 'HEAD — run: `git rev-parse --short HEAD`', kind: 'pin', verify: { type: 'pin', command: 'git rev-parse --short HEAD' } }],
+    // No `command` on verify -- compose.mjs stopped emitting one, because
+    // forwarding it is what pushed verifyPin off its self-answering path.
+    drafts: [{ text: 'HEAD — run: `git rev-parse --short HEAD`', kind: 'pin', verify: { type: 'pin' } }],
   },
   {
     id: 'health', title: 'h', notes: [], stubs: [],
