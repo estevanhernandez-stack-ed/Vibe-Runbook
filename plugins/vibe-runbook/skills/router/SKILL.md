@@ -23,6 +23,7 @@ an argument:
 
 ```
 cd ${CLAUDE_PLUGIN_ROOT}
+node engine/cli.mjs author                     --project <path>   # add --env <name> only to probe a live health url
 node engine/cli.mjs scan      --runbook <path> --project <path>
 node engine/cli.mjs walk      --env <name>     --project <path>
 node engine/cli.mjs remediate                  --project <path>   # add --apply only on an explicit yes

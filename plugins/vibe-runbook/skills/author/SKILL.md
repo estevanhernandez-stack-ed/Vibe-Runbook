@@ -17,6 +17,14 @@ node engine/cli.mjs author --project <app root>
 `--out <path>` optionally names the destination; it defaults to
 `docs/RUNBOOK.md` under the project root.
 
+`--env <name>` is optional and it is what permits any live probe. Without it,
+nothing is contacted and the health section is left as its question. With it,
+the base url is selected by that exact key — `--env prod` uses `baseUrls.prod`
+and nothing else — the run goes through the same credential preflight a walk
+does, and the url that was checked is recorded in `.vibe-runbook/config.json`
+so a later `:walk` checks the same one. Never offer an environment the user did
+not name, and never suggest `--env local` to get past a preflight stop.
+
 1. Report which gatherers ran and which were skipped. A skipped gatherer means a
    thinner runbook, and the user should know which sections got thinner.
 2. If a runbook already existed, say so plainly: nothing was overwritten, a

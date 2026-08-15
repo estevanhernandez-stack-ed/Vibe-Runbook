@@ -11,14 +11,22 @@ Every command skill runs the engine rather than performing its job by hand:
 
 ```
 cd ${CLAUDE_PLUGIN_ROOT}
-node engine/cli.mjs <scan|walk|remediate> [--runbook <path>] [--env <name>] --project <path> [--apply]
+node engine/cli.mjs <scan|walk|remediate|author> [--runbook <path>] [--env <name>] --project <path> [--apply] [--out <path>]
 ```
 
 `--project` is the user's project root and it is load-bearing on every
 invocation. It defaults to the working directory, and the working directory is
 the plugin's own — omit it and state, config, and every pin command land in the
 installed plugin instead of the user's repo. `--apply` exists only on
-`remediate`, and only an explicit user yes puts it on the line.
+`remediate`, and only an explicit user yes puts it on the line. `--out` exists
+only on `author`.
+
+`--env` is required on `walk` and gates every live probe on `author`. Named on
+`author`, it selects the base url by that exact key and puts the run behind the
+same credential preflight a walk goes through. Omitted on `author`, nothing is
+probed at all and the health section emits its question instead. There is no
+inference from a base url's position in a manifest — that is how a production
+token reaches a localhost listener.
 
 ## Posture
 
