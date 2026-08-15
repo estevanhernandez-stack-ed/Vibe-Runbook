@@ -1,5 +1,14 @@
+import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { verifyPin, verifyStatus } from './verify.mjs';
 import { assignVerdict } from './verdict.mjs';
+import { runGatherers } from './gather/contract.mjs';
+import { sourceGatherer } from './gather/source.mjs';
+import { gitGatherer } from './gather/git.mjs';
+import { manifestGatherer } from './gather/manifest.mjs';
+import { compose } from './compose.mjs';
+import { emitRunbook } from './emit.mjs';
+import { backupFile } from './backup.mjs';
 
 const NO_COST = { raw: null, count: null };
 
@@ -33,4 +42,37 @@ export function verifyDrafts(sections, { runCommand, probeUrl }) {
       return { ...draft, verdict: decided.verdict, evidence: decided.evidence };
     }),
   }));
+}
+
+const GATHERERS = [sourceGatherer, gitGatherer, manifestGatherer];
+
+// The only mutating path this half of the plugin has, and the posture is the
+// same one remediate.mjs already committed to: gather, compose, and verify
+// before a single byte is written, and never overwrite what is already
+// there. A generated runbook is a proposal until a person says otherwise --
+// the target only gets written when nothing occupies it yet.
+export function authorRunbook(ctx) {
+  const evidence = runGatherers(GATHERERS, ctx);
+  const composed = compose(evidence);
+  const sections = verifyDrafts(composed, ctx);
+  const markdown = emitRunbook({
+    appName: ctx.appName,
+    sections,
+    generatedFrom: evidence.ran,
+  });
+
+  const target = ctx.out ?? join(ctx.projectRoot, 'docs', 'RUNBOOK.md');
+  mkdirSync(dirname(target), { recursive: true });
+
+  // Never clobber. A tool whose product is trustworthiness does not overwrite
+  // a person's documentation because it believed it knew better.
+  if (existsSync(target)) {
+    const proposal = target.replace(/\.md$/, '.vibe-runbook-proposal.md');
+    backupFile(target);
+    writeFileSync(proposal, markdown, 'utf8');
+    return { markdown, outPath: proposal, wrote: false, sections, evidence };
+  }
+
+  writeFileSync(target, markdown, 'utf8');
+  return { markdown, outPath: target, wrote: true, sections, evidence };
 }

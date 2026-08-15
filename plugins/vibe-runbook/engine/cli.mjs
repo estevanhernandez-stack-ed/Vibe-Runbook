@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { join, dirname, resolve as resolvePath } from 'node:path';
+import { join, dirname, basename, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanRunbook } from './scan.mjs';
 import { preflight } from './preflight.mjs';
@@ -10,6 +10,7 @@ import { assignVerdict } from './verdict.mjs';
 import { renderReport } from './report.mjs';
 import { planRemediation, renderPlan } from './remediate.mjs';
 import { backupFile } from './backup.mjs';
+import { authorRunbook } from './author.mjs';
 
 // Bound to the project root, not to wherever the engine happens to be running
 // from (Fix 5, 2026-08-14 final review). A pin's verification command is
@@ -279,10 +280,42 @@ if (isMain) {
         );
       }
     }
+  } else if (command === 'author') {
+    // The other mutating path, and it never touches an existing runbook --
+    // see author.mjs's own "never clobbers" comment. A generated document is
+    // a proposal until a person merges it in, same posture as remediate's
+    // diff-by-default above.
+    let appName = basename(root);
+    try {
+      appName = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name || appName;
+    } catch {
+      // no package.json, or unparseable — the directory name is a fine fallback
+    }
+
+    const result = authorRunbook({
+      projectRoot: root,
+      appName,
+      out: arg('out'),
+      runCommand: shellIn(root),
+      probeUrl: makeProbe(process.env[`VIBE_RUNBOOK_${String(arg('env') ?? '').toUpperCase()}_TOKEN`]),
+    });
+
+    console.log(`gathered from: ${result.evidence.ran.join(', ') || 'nothing'}`);
+    if (result.evidence.skipped.length > 0) {
+      console.log(`skipped: ${result.evidence.skipped.join(', ')}`);
+    }
+    const stubCount = result.sections.reduce((n, s) => n + s.stubs.length, 0);
+    if (result.wrote) {
+      console.log(`wrote ${result.outPath}`);
+    } else {
+      console.log(`a runbook already exists and was NOT overwritten.`);
+      console.log(`proposal written to ${result.outPath} — read the diff and merge what you want.`);
+    }
+    console.log(`${stubCount} sections are unwritten and need you.`);
   } else {
     console.error(
-      'usage: vibe-runbook <scan|walk|remediate> [--runbook <path>] [--env <name>] ' +
-      '[--project <path>] [--apply]'
+      'usage: vibe-runbook <scan|walk|remediate|author> [--runbook <path>] [--env <name>] ' +
+      '[--project <path>] [--apply] [--out <path>]'
     );
     process.exit(1);
   }
