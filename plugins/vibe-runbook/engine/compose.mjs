@@ -58,6 +58,31 @@ function resolveBaseUrl(facts, env) {
   return named && /^https?:/.test(named.value) ? named.value : '';
 }
 
+// Fix A (CRITICAL, 2026-08-14 re-review). `--env` gated WHETHER a probe
+// happened and not WHERE it went. An affordance whose `path` is already a
+// full url skipped the base-url join entirely, so a manifest carrying
+// `http://127.0.0.1:<local>/api/health` as an absolute path, invoked as
+// `--env prod` with a prod token set, sent `Bearer PROD-SECRET-TOKEN` to
+// the local host over plain HTTP -- the original C1 outcome verbatim,
+// through the one branch the first fix did not cover.
+//
+// The ruled invariant is "emit the stub rather than falling back to another
+// host", and an absolute path that never consults the named host IS another
+// host. So an absolute url has to prove it belongs to the environment that
+// was named: same origin as that environment's base url, or it does not get
+// drafted. Origin rather than a string compare, so a trailing slash or a
+// default port does not read as a different host -- and any url that will
+// not parse is not a match, because an unparseable url cannot be shown to
+// be the named one.
+function sameOrigin(a, b) {
+  if (!a || !b) return false;
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 export function compose({ facts, gaps }, { env } = {}) {
   const baseUrl = resolveBaseUrl(facts, env);
 
@@ -104,16 +129,41 @@ export function compose({ facts, gaps }, { env } = {}) {
     // probe" has to mean every probe, or it means nothing.
     if (id === 'health' && env) {
       for (const f of pick(facts, 'health-path')) {
-        // An absolute path is already a full URL -- joining it onto a base
-        // doubles it into something unreachable. A relative path with no
-        // base to join against is not checkable either; rather than draft a
-        // status assertion nobody can answer, skip it and let the
-        // section-level stub below carry the question (review, Fix 4).
+        // Three outcomes, and the two that are not a drafted claim both fall
+        // through to the section stub.
+        //
+        // An absolute path is already a full URL, so joining it onto a base
+        // would double it into something unreachable -- it is used as-is,
+        // but ONLY once it has proved it points at the environment that was
+        // named (sameOrigin above). A different origin is a different host,
+        // and reaching one the operator did not name is the whole C1 defect.
+        //
+        // A relative path with no base to join against is not checkable
+        // either; rather than draft a status assertion nobody can answer,
+        // skip it and let the section-level stub carry the question
+        // (review, Fix 4).
         const isAbsolute = /^https?:/.test(f.value);
-        const url = isAbsolute ? f.value : baseUrl ? `${baseUrl.replace(/\/$/, '')}${f.value}` : null;
+        let url = null;
+        if (isAbsolute) {
+          if (sameOrigin(f.value, baseUrl)) url = f.value;
+        } else if (baseUrl) {
+          url = `${baseUrl.replace(/\/$/, '')}${f.value}`;
+        }
         if (!url) continue;
+        // The claim text names the PATH, never the whole url, so both
+        // branches emit one claim shape. Found live re-verifying Fix A: an
+        // absolute path put its host into the claim text, and verify.mjs's
+        // expectedCode reads the first 1xx-5xx-shaped number it finds --
+        // which is `127` out of `127.0.0.1`, not the 200 the sentence
+        // actually asserts. The generator then wrote its own document a
+        // FAIL note reading "runbook says 127". A false FAIL against a
+        // runbook telling the truth is the class guide invariant 6 exists
+        // to prevent, and emitting one into the document being generated is
+        // the worst place to do it. The host is not lost: it is in
+        // verify.url and in the config.urls entry the walk resolves.
+        const shownPath = isAbsolute ? new URL(url).pathname : f.value;
         drafts.push({
-          text: `**Right:** \`${f.value}\` answers 200.`,
+          text: `**Right:** \`${shownPath}\` answers 200.`,
           kind: 'status-assertion',
           verify: { type: 'status', url },
         });
