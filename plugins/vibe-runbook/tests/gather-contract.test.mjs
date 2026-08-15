@@ -7,6 +7,19 @@ test('fact kinds are fixed and frozen', () => {
   expect(Object.isFrozen(FACT_KINDS)).toBe(true);
 });
 
+// Fix 4 (2026-08-14 whole-branch review). `revision-command` was consumed by
+// compose.mjs and emitted by no gatherer, and the only producer available
+// for it -- git -- already emits `head-command` naming the same command, so
+// wiring it would have meant a second header pin that duplicates the first.
+// A vocabulary entry connected to nothing is a wishlist wearing a schema's
+// clothes; it is gone rather than filled with a duplicate. The kind being
+// absent is what makes a stray emitter fail loudly instead of silently.
+test('revision-command is not a fact kind, and emitting one is refused', () => {
+  expect(FACT_KINDS).not.toContain('revision-command');
+  expect(() => makeEvidence('git', { facts: [{ kind: 'revision-command', key: 'r', value: 'x', source: 'git' }] }))
+    .toThrow(/unknown fact kind/i);
+});
+
 test('makeEvidence rejects an unknown fact kind rather than passing it through', () => {
   expect(() => makeEvidence('source', { facts: [{ kind: 'nonsense', key: 'x', value: 'y', source: 'f' }] }))
     .toThrow(/unknown fact kind/i);

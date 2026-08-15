@@ -5,6 +5,12 @@ import { makeEvidence } from './contract.mjs';
 const RUN_SCRIPTS = ['start', 'dev', 'serve'];
 const DEPLOY_SCRIPTS = [/^deploy/i, /^publish/i];
 const ROLLBACK_SCRIPTS = [/^rollback/i, /^revert/i];
+// 2026-08-14 whole-branch review: `log-command` was consumed by compose.mjs
+// and emitted by nothing, which made "Logs and observability" structurally
+// unfillable on every project, forever -- including a project whose log
+// command was sitting in its own package.json. `npm run logs` (wrangler
+// tail, firebase functions:log, gcloud logging read) is the cowpath.
+const LOG_SCRIPTS = [/^log/i];
 
 function readJson(path) {
   try {
@@ -31,6 +37,9 @@ export const sourceGatherer = {
         }
         if (name === 'test') {
           facts.push({ kind: 'test-command', key: 'test', value: 'npm test', source: 'package.json' });
+        }
+        if (LOG_SCRIPTS.some((re) => re.test(name))) {
+          facts.push({ kind: 'log-command', key: name, value: `npm run ${name}`, source: 'package.json' });
         }
         const port = String(cmd).match(/--port[= ](\d+)/);
         if (port) facts.push({ kind: 'port', key: name, value: port[1], source: 'package.json' });

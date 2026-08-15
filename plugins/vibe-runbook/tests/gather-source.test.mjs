@@ -11,6 +11,15 @@ test('finds run and test commands from package.json scripts', () => {
   expect(find(ev, 'test-command').map((f) => f.value)).toContain('npm test');
 });
 
+// Fix 4 (2026-08-14 whole-branch review): `log-command` was consumed by
+// compose.mjs and produced by nothing, which made "Logs and observability"
+// structurally unfillable on every project forever -- including a project
+// whose log command was sitting in its own package.json the whole time.
+test('finds a log command from a package.json script', () => {
+  const ev = sourceGatherer.run({ projectRoot: full });
+  expect(find(ev, 'log-command').map((f) => f.value)).toContain('npm run logs');
+});
+
 test('finds deploy and rollback scripts by name', () => {
   const ev = sourceGatherer.run({ projectRoot: full });
   expect(find(ev, 'deploy-command')[0].value).toMatch(/deploy\.sh/);

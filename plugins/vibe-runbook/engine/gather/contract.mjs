@@ -1,13 +1,21 @@
 // A gatherer answers "what evidence can I collect here", never "what framework
 // is this". Sources, not stacks — that is what keeps a six-stack portfolio from
 // needing six inspectors.
+//
+// Every kind here is either produced or consumed today. `revision-command`
+// was neither -- it was consumed by compose.mjs and emitted by nothing, and
+// wiring a producer for it would have meant git emitting a second header pin
+// naming the same command `head-command` already names (2026-08-14
+// whole-branch review). A vocabulary entry that connects to nothing is a
+// wishlist wearing a schema's clothes, so it is gone rather than filled with
+// a duplicate. `test-command` and `route` are emitted and not yet consumed;
+// an unread fact is inert, not a lie, and both have a consumer coming.
 export const FACT_KINDS = Object.freeze([
   'run-command',
   'test-command',
   'deploy-command',
   'rollback-command',
   'log-command',
-  'revision-command',
   'head-command',
   'health-path',
   'base-url',

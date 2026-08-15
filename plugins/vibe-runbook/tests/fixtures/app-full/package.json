@@ -3,6 +3,7 @@
   "scripts": {
     "start": "node server.mjs --port 3000",
     "test": "jest",
+    "logs": "wrangler tail demo-app",
     "deploy": "./scripts/deploy.sh"
   }
 }
