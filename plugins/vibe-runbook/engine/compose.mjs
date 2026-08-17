@@ -1,10 +1,21 @@
+// Harm taxonomy (2026-08-17): `:author` was run against a real app and a
+// person filled in what the scaffold never asked. Six sections here cover
+// how to run, deploy, roll back and observe the thing -- nothing about what
+// it costs, what a deploy wipes out on the way in, or what cannot be
+// undone once it happens. `blast` sits next to deploy/rollback on purpose,
+// where a reader looking for deploy fallout looks first. `cost` and `undo`
+// land after observability, mechanism-first-then-harm; `incident` stays
+// last regardless, because it is the one section only a person can fill in.
 export const SECTIONS = Object.freeze([
   { id: 'header', title: 'What you are looking at' },
   { id: 'run', title: 'Run it locally' },
   { id: 'health', title: 'Is it up' },
   { id: 'deploy', title: 'Deploy' },
   { id: 'rollback', title: 'Roll back' },
+  { id: 'blast', title: 'What a deploy destroys' },
   { id: 'observability', title: 'Logs and observability' },
+  { id: 'cost', title: 'What it costs' },
+  { id: 'undo', title: 'What cannot be undone' },
   { id: 'incident', title: 'When something is wrong' },
 ]);
 
@@ -13,6 +24,11 @@ export const SECTIONS = Object.freeze([
 // completely silent, which is the exact failure this plugin exists to
 // refuse (review, 2026-08-14, Fix 1). Each is a real question rather than a
 // placeholder, because the stub IS the ask.
+//
+// `cost`, `blast` and `undo` are stub-only sections and stay that way on
+// purpose (harm taxonomy, 2026-08-17): no gatherer produces a fact for what
+// something costs or what can't be undone, and none should -- the value of
+// these three is entirely in the question, not in an automated answer.
 const STUB_QUESTIONS = {
   header: ['How do you pin the exact revision this runbook was walked against?'],
   run: ['What command starts this service locally, and what does it need to run?'],
@@ -25,6 +41,18 @@ const STUB_QUESTIONS = {
   ],
   observability: ['Where do the logs actually live, and what command tails them?'],
   rollback: ['How do you confirm a rollback took effect?'],
+  cost: [
+    'What does each operation actually cost, and which paid service sits behind it?',
+    'What here is capped by request count but has no cap on what it spends?',
+  ],
+  blast: [
+    'What state does a deploy reset or throw away the moment the process restarts?',
+    'What happens to work already in flight (a build, a job, a request) when a deploy lands on top of it?',
+  ],
+  undo: [
+    "What here cannot be undone, and how long is the window to catch it before it's final?",
+    'Which destructive action can an API caller or agent take that a person at the keyboard cannot reverse?',
+  ],
 };
 
 const pick = (facts, kind) => facts.filter((f) => f.kind === kind);

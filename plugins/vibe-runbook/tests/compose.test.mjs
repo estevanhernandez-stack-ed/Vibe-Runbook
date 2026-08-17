@@ -198,6 +198,52 @@ test('origin matching is not a string compare: trailing slash and default port s
   expect(port.find((s) => s.id === 'health').drafts).toHaveLength(1);
 });
 
+// ---------------------------------------------------------------------------
+// Harm taxonomy (2026-08-17). `:author` was run against a real app and a
+// person filled in what the scaffold never asked: what things cost, what a
+// deploy wipes out on the way in, and what cannot be undone once it
+// happens. All three are stub-only by design -- no gatherer can derive
+// "what does this cost" or "who can destroy something a person can't
+// restore" from source, so the value is entirely in the question being
+// asked. `blast` sits beside deploy/rollback on purpose (a reader looking
+// for deploy fallout looks there first); `cost` and `undo` land after
+// observability, ahead of `incident`, which stays last because it is the
+// one section only a person can fill in.
+// ---------------------------------------------------------------------------
+
+test('the three harm sections exist, in the chosen order, around deploy/rollback and before incident', () => {
+  expect(SECTIONS.map((s) => s.id)).toEqual([
+    'header', 'run', 'health', 'deploy', 'rollback', 'blast',
+    'observability', 'cost', 'undo', 'incident',
+  ]);
+});
+
+test('cost, blast and undo are stub-only: a full fact set never fills them', () => {
+  const out = compose({ facts, gaps: [] }, prod);
+  for (const id of ['cost', 'blast', 'undo']) {
+    const section = out.find((s) => s.id === id);
+    expect(section.drafts).toHaveLength(0);
+    expect(section.stubs).toHaveLength(2);
+    for (const q of section.stubs) expect(q).toMatch(/\?$/);
+  }
+});
+
+// 9 pre-existing stub questions (header 1, run 1, health 1, deploy 1,
+// rollback 1, observability 1, incident 3) plus the six the harm sections
+// add (two apiece) -- asserted as an absolute number, not a delta, since
+// there is no "before" state left to diff against once SECTIONS itself has
+// changed.
+test('a fully-bare compose carries fifteen stub questions total, six of them new', () => {
+  const out = compose({ facts: [], gaps: [] });
+  const total = out.reduce((n, s) => n + s.stubs.length, 0);
+  const harmOnly = ['cost', 'blast', 'undo'].reduce(
+    (n, id) => n + out.find((s) => s.id === id).stubs.length,
+    0,
+  );
+  expect(harmOnly).toBe(6);
+  expect(total).toBe(15);
+});
+
 // A named env whose base url is absent has no origin to prove membership
 // against, so an absolute path cannot be shown to belong to it.
 test('an absolute health path with no base url for the named env is not drafted', () => {

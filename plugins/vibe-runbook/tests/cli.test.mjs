@@ -499,6 +499,23 @@ test('author with no env named writes the document, probes nothing, and says so'
   expect(existsSync(join(project, '.vibe-runbook', 'config.json'))).toBe(false);
 });
 
+// Harm taxonomy (2026-08-17): cost/blast/undo are stub-only sections, so on
+// this exact fixture (app-full, no env, no .git in the temp copy) they add
+// six to the unwritten count no matter what else was gathered. Was 5
+// (header pin, health, incident's three) before these sections existed --
+// asserted at the value it is now, since there is no old SECTIONS array
+// left to diff against.
+test('author prints an unwritten count that includes the three new harm sections', () => {
+  const project = authorProject();
+  const out = execFileSync('node', [cli, 'author', '--project', project], { cwd: pluginDir, encoding: 'utf8' });
+
+  expect(out).toMatch(/11 sections are unwritten and need you\./);
+  const doc = readFileSync(join(project, 'docs', 'RUNBOOK.md'), 'utf8');
+  expect(doc).toMatch(/\*\*Unwritten:\*\* What does each operation/);
+  expect(doc).toMatch(/\*\*Unwritten:\*\* What state does a deploy/);
+  expect(doc).toMatch(/\*\*Unwritten:\*\* What here cannot be undone/);
+});
+
 // The composition the plugin sells, end to end and with no network: author
 // writes it, scan reads it back, walk checks the SAME url the generator
 // checked. Before Fix 2 this ended in
