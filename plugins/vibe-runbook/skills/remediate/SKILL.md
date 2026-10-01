@@ -41,7 +41,7 @@ That prints every diff and writes nothing. Read the diffs out to the user.
    - **The claim was joined across a line wrap** and has no single-line span to
      replace. STAR's own HEAD pin is this shape: `HEAD` ends one line and
      `` `0855bd2` `` opens the next inside a blockquote. The claim is correct;
-     rewriting it means rewriting the wrap, which v0.1 does not do. Offer the
+     rewriting it means rewriting the wrap, which remediate does not do yet. Offer the
      user the diff to apply by hand instead — the `after` line is exact.
 4. Report the backup paths so a rollback is one step.
 

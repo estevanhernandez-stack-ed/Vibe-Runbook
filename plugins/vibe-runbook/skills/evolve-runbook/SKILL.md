@@ -5,10 +5,10 @@ description: This skill should be used when the user says "/vibe-runbook:evolve-
 
 # vibe-runbook evolve
 
-**In v0.1 the data home is resolved and never written to.** Nothing logs a
+**The data home is resolved and never written to (still true at 0.2.1).** Nothing logs a
 session yet, so the directory this skill reads is empty by construction. Say
 that plainly instead of reporting "no signal found", which reads as "nothing
-went wrong" — the loop has no well to draw from until v0.2 populates it.
+went wrong" — the loop has no well to draw from until a release wires session logging and says so in the CHANGELOG.
 
 Until then, the signal is whatever the user brings: a `claims.json` from a real
 run, a misclassification they noticed, a runbook whose confidence came back
