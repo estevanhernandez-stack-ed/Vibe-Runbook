@@ -123,7 +123,7 @@ export function verifyStatus(claim, { httpProbe }) {
     : { ok: false, evidence: `${claim.url} -> ${observed}, runbook says ${expected}` };
 }
 
-// IMPLEMENTED AND NOT YET WIRED. No production caller in v0.1: the walk has no
+// IMPLEMENTED AND NOT YET WIRED. No production caller as of 0.2.1: the walk has no
 // write-route enumeration to feed it, which is the missing half rather than
 // this one. Kept because it is a spec-named capability with a technique behind
 // it that found a real defect on STAR, and re-deriving it later would be the
@@ -149,7 +149,7 @@ export function probeWriteGuard(route, { post }) {
   return { ok: false, evidence: `${route.path} -> ${observed}, runbook says ${route.expected}` };
 }
 
-// IMPLEMENTED AND NOT YET WIRED. No production caller in v0.1 -- the report's
+// IMPLEMENTED AND NOT YET WIRED. No production caller as of 0.2.1 -- the report's
 // coverage fraction is computed from the claim list directly. This is the
 // shape the enumeration half will take when a contract source is read; it is
 // not a live path today.

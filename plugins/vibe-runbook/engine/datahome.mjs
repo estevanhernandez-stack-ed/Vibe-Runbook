@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-// IMPLEMENTED AND NOT YET WIRED. No production caller in v0.1: nothing writes
+// IMPLEMENTED AND NOT YET WIRED. No production caller as of 0.2.1: nothing writes
 // session logs yet, so the resolved directory is created and never populated.
 // evolve-runbook says so out loud rather than promising a well that is empty.
 //

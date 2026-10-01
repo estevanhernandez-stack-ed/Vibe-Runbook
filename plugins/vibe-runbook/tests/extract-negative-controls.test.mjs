@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { extractClaims } from '../engine/extract.mjs';
 
-// Two real runbooks from sibling repos, copied verbatim (not synthesized),
+// Two real runbooks from sibling repos, copied with their structure and every
+// marker verbatim (not synthesized). discord-ops-runbook.md had its identifiers
+// scrubbed in 0.2.1 (guild ids, app id, invite URL, decision id, estate paths,
+// owner's name); no marker word, bold span or list shape changed, which is why
+// its claim baseline below is unchanged.
 // the same way star-smoke.md is a real STAR document rather than a fixture
 // invented for this suite. Their job is the opposite of star-smoke.md's:
 // prove the marker widening did not become inference. If either of these
@@ -13,7 +17,7 @@ const manifestFeed = readFileSync(
   'utf8',
 );
 const discord = readFileSync(
-  new URL('./fixtures/626-discord-runbook.md', import.meta.url),
+  new URL('./fixtures/discord-ops-runbook.md', import.meta.url),
   'utf8',
 );
 
@@ -45,8 +49,8 @@ test('manifest-feed-runbook.md — a real runbook with no expectation words — 
 // explicit marker word is exactly the signal the spec requires. This test
 // pins both facts: the pre-existing baseline is untouched, and the prose
 // mechanism contributes precisely one claim, from precisely that line.
-test('626-discord-runbook.md — the widening adds exactly one genuine claim on top of a pre-existing (unrelated) baseline', () => {
-  const { claims, coverage } = extractClaims(discord, 'tests/fixtures/626-discord-runbook.md');
+test('discord-ops-runbook.md — the widening adds exactly one genuine claim on top of a pre-existing (unrelated) baseline', () => {
+  const { claims, coverage } = extractClaims(discord, 'tests/fixtures/discord-ops-runbook.md');
 
   const proseClaims = claims.filter((c) => c.marker === 'prose');
   expect(proseClaims.length).toBe(1);
