@@ -5,6 +5,16 @@ All notable changes to vibe-runbook are documented here. Format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The plugin ships from
 `plugins/vibe-runbook/`; `plugin.json` and `package.json` carry the same version.
 
+## [0.2.2] — 2026-10-16
+
+### Fixed
+
+- **Commands now load their skills.** A plugin command shadows the skill with the same name, so the slash command loaded only the short command wrapper and the full skill instructions never loaded. Each wrapper now points the agent at its `SKILL.md`.
+
+### Added
+
+- **Static plugin check in CI** (`scripts/check-plugin.js`). Fails on SKILL or command frontmatter that would load with empty metadata, and on a command wrapper that doesn't point at its skill.
+
 ## [0.2.1] — 2026-10-01
 
 Release hygiene for the first stable promotion (the vibe-plugins stable channel
