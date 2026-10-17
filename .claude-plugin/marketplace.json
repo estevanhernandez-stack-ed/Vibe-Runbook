@@ -1,0 +1,28 @@
+{
+  "name": "vibe-runbook",
+  "owner": {
+    "name": "626Labs LLC"
+  },
+  "metadata": {
+    "description": "Vibe Runbook: keep your runbooks true. Canary channel: this repo's main."
+  },
+  "plugins": [
+    {
+      "name": "vibe-runbook",
+      "source": "./plugins/vibe-runbook",
+      "description": "Your runbook says do X and you will see W. Nothing checks whether that is still true. /vibe-runbook:author drafts one from what it can actually derive about your app: a revision pin that answers itself, the commands that run it, the deploy and rollback scripts where they exist, and the names of the configuration keys it needs. What a repository cannot tell you (severity thresholds, escalation, the reasoning behind a fix) comes out as explicit questions, and every later check reports them still unanswered. Every derived claim is checked before it is written; a check that could not run says so on the page; pins name the command that answers them rather than a value that goes stale. It never overwrites a runbook you wrote, it proposes beside it. Then the walker keeps it true: reads a runbook, classifies every claim, and walks the machine-checkable ones against an environment you name, read-only, never spending. Six verdicts: PASS, FAIL, BLOCKED, SPENDS, HUMAN, QUESTION. Past-tense coverage records are reported and never failed. Credential preflight hard-stops rather than walking your local machine and calling it green. Every report states the fraction of the enumerated surface it actually checked.",
+      "author": {
+        "name": "626Labs LLC"
+      },
+      "keywords": [
+        "vibe-runbook",
+        "runbook",
+        "documentation-testing",
+        "vibe-coding",
+        "claude-code-plugin",
+        "626labs"
+      ],
+      "category": "productivity"
+    }
+  ]
+}
